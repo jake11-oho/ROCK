@@ -107,9 +107,6 @@ class BaseActor:
         self._gauges["disk"] = self.meter.create_gauge(
             name="xrl_gateway.system.disk", description="Disk Usage", unit="1"
         )
-        self._gauges["disk_rootfs"] = self.meter.create_gauge(
-            name="xrl_gateway.system.disk.rootfs", description="Sandbox rootfs disk usage percent", unit="1"
-        )
         self._gauges["disk_log"] = self.meter.create_gauge(
             name="xrl_gateway.system.disk.log", description="Sandbox log dir disk usage percent", unit="1"
         )
@@ -220,9 +217,9 @@ class BaseActor:
                 self._gauges["disk"].set(metrics["disk"], attributes=attributes)
                 self._gauges["net"].set(metrics["net"], attributes=attributes)
 
-                if metrics.get("disk_rootfs_percent") is not None:
-                    self._gauges["disk_rootfs"].set(metrics["disk_rootfs_percent"], attributes=attributes)
+                if metrics.get("disk_log_percent"):
                     self._gauges["disk_log"].set(metrics["disk_log_percent"], attributes=attributes)
+                if metrics.get("disk_dind_percent"):
                     self._gauges["disk_dind"].set(metrics["disk_dind_percent"], attributes=attributes)
 
                 # cpus_used inherits the semantic of metrics["cpu"]: it is reported
