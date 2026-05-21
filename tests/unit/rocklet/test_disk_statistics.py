@@ -38,7 +38,6 @@ async def test_get_statistics_returns_all_disk_fields(runtime):
     assert stats["cpu"] == 10.0
     assert stats["mem"] == 50.0
     assert stats["disk"] == 75.0
-    assert stats["disk_rootfs_percent"] == 75.0
     assert stats["disk_log_percent"] == 60.0
     assert stats["disk_dind_percent"] == 80.0
     assert stats["net"] == 300
@@ -69,7 +68,7 @@ async def test_get_statistics_no_kata_runtime(runtime):
         stats = await runtime.get_statistics()
 
     assert stats["disk_dind_percent"] == 0.0
-    assert stats["disk_rootfs_percent"] == 30.0
+    assert stats["disk"] == 30.0
     assert stats["disk_log_percent"] == 20.0
 
 

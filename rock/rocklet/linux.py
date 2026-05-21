@@ -373,8 +373,7 @@ class LinuxRocklet(Rocklet):
         return {
             "cpu": self._cgroup_cpu.cpu_percent(),
             "mem": psutil.virtual_memory().percent,
-            "disk": disk_root.percent,
-            "disk_rootfs_percent": disk_root.percent,
+            "disk": disk_root.percent,  # legacy metric name, actually rootfs usage percent
             "disk_log_percent": disk_log_percent,
             "disk_dind_percent": disk_dind_percent,
             "net": psutil.net_io_counters().bytes_recv + psutil.net_io_counters().bytes_sent,

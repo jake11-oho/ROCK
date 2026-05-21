@@ -90,7 +90,6 @@ class MetricsMonitor:
         self._register_gauge(
             MetricsConstants.SANDBOX_DISK, "Single sandbox disk usage percentage of allocated resources"
         )
-        self._register_gauge(MetricsConstants.SANDBOX_DISK_ROOTFS, "Sandbox rootfs disk usage percent")
         self._register_gauge(MetricsConstants.SANDBOX_DISK_LOG, "Sandbox log dir disk usage percent")
         self._register_gauge(MetricsConstants.SANDBOX_DISK_DIND, "Sandbox kata DinD disk usage percent")
         self._register_gauge(
