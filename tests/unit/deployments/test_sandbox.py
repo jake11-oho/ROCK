@@ -2,12 +2,12 @@ import pytest
 import ray
 
 from rock.actions import (
+    BashAction,
     BashObservation,
+    Command,
     CommandResponse,
+    CreateBashSessionRequest,
 )
-from rock.admin.proto.request import SandboxBashAction as BashAction
-from rock.admin.proto.request import SandboxCommand as Command
-from rock.admin.proto.request import SandboxCreateBashSessionRequest as CreateBashSessionRequest
 from rock.deployments.config import LocalDeploymentConfig
 from rock.logger import init_logger
 from rock.sandbox.sandbox_actor import SandboxActor
