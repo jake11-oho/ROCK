@@ -68,7 +68,7 @@ class ImageCleanupTask(BaseTask):
         check_and_install_cmd = (
             f"command -v docuum > /dev/null 2>&1 || curl {env_vars.ROCK_DOCUUM_INSTALL_URL} -LSfs | sh"
         )
-        await runtime.execute(Command(command=check_and_install_cmd, shell=True))
+        await runtime.execute(Command(command=check_and_install_cmd, shell=True, sandbox_id="scheduler-task"))
 
         log_redirect = (
             '[ -n "$ROCK_LOGGING_PATH" ] && DOCUUM_LOG="$ROCK_LOGGING_PATH/docuum.log" || DOCUUM_LOG="/dev/null"'
@@ -78,7 +78,7 @@ class ImageCleanupTask(BaseTask):
         if keep_args:
             docuum_cmd = f"{docuum_cmd} {keep_args}"
         command = f'{log_redirect}; nohup {docuum_cmd} > "$DOCUUM_LOG" 2>&1 & echo {PID_PREFIX}${{!}}{PID_SUFFIX}'
-        result = await runtime.execute(Command(command=command, shell=True))
+        result = await runtime.execute(Command(command=command, shell=True, sandbox_id="scheduler-task"))
 
         pid = extract_nohup_pid(result.stdout)
         logger.info(f"image cleanup task [{pid}] run successfully on worker[{runtime._config.host}]")
@@ -93,7 +93,9 @@ class ImageCleanupTask(BaseTask):
                 f"docker builder prune -f --keep-storage {self.keep_build_storage}",
             ]
             prune_cmd = "; ".join(f"({s}) 2>&1 || true" for s in prune_steps)
-            prune_result = await runtime.execute(Command(command=prune_cmd, shell=True, check=False))
+            prune_result = await runtime.execute(
+                Command(command=prune_cmd, shell=True, check=False, sandbox_id="scheduler-task")
+            )
             prune_output = (prune_result.stdout or "").strip()[:1000]
             prune_exit = prune_result.exit_code
             logger.info(

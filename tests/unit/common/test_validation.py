@@ -1,39 +1,29 @@
-from rock.actions import ResponseStatus
-from rock.common.validation import validate_required_str
+"""Tests for the NonBlankStr Pydantic type."""
+
+import pytest
+from pydantic import BaseModel, ValidationError
+
+from rock.common.validation import NonBlankStr
 
 
-def test_validate_required_str_with_valid_value_returns_none():
-    assert validate_required_str("sandbox-123", "sandbox_id") is None
+class _Model(BaseModel):
+    value: NonBlankStr
 
 
-def test_validate_required_str_with_padded_value_returns_none():
-    assert validate_required_str("  sandbox-123  ", "sandbox_id") is None
+def test_accepts_normal_string():
+    assert _Model(value="abc").value == "abc"
 
 
-def test_validate_required_str_none_returns_failed_response():
-    resp = validate_required_str(None, "sandbox_id")
-    assert resp is not None
-    assert resp.status == ResponseStatus.FAILED
-    assert "sandbox_id is required" in resp.error
-    assert resp.result is None
+def test_strips_surrounding_whitespace():
+    assert _Model(value="  abc  ").value == "abc"
 
 
-def test_validate_required_str_empty_returns_failed_response():
-    resp = validate_required_str("", "sandbox_id")
-    assert resp is not None
-    assert resp.status == ResponseStatus.FAILED
-    assert "sandbox_id is required" in resp.error
-    assert resp.result is None
+@pytest.mark.parametrize("bad", ["", "   ", "\t\n"])
+def test_rejects_empty_or_whitespace(bad):
+    with pytest.raises(ValidationError):
+        _Model(value=bad)
 
 
-def test_validate_required_str_whitespace_only_returns_failed_response():
-    resp = validate_required_str("   ", "sandbox_id")
-    assert resp is not None
-    assert resp.status == ResponseStatus.FAILED
-    assert "sandbox_id is required" in resp.error
-
-
-def test_validate_required_str_uses_param_name_in_message():
-    resp = validate_required_str("", "image")
-    assert resp is not None
-    assert "image is required" in resp.error
+def test_rejects_missing_field():
+    with pytest.raises(ValidationError):
+        _Model()

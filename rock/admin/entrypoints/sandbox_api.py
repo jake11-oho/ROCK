@@ -38,7 +38,7 @@ from rock.common.constants import (
     SUPPORT_KATA_SWITCH,
 )
 from rock.common.exception import handle_exceptions
-from rock.common.validation import validate_required_str
+from rock.common.validation import NonBlankStr
 from rock.deployments.config import AcceleratorType, DockerDeploymentConfig
 from rock.sandbox.sandbox_manager import SandboxManager
 from rock.sdk.common.exceptions import BadRequestRockError
@@ -166,8 +166,6 @@ async def _apply_cpu_overcommit_default(config: DockerDeploymentConfig, rock_aut
 @sandbox_router.post("/start")
 @handle_exceptions(error_message="start sandbox failed")
 async def start(request: SandboxStartRequest) -> RockResponse[SandboxStartResponse]:
-    if err := validate_required_str(request.image, "image"):
-        return err
     config = DockerDeploymentConfig.from_request(request)
     await _apply_accelerator_type_validation(config)
     await _apply_kata_runtime_switch(config)
@@ -183,8 +181,6 @@ async def start_async(
     request: SandboxStartRequest,
     headers: Annotated[StartHeaders, Depends()],
 ) -> RockResponse[SandboxStartResponse]:
-    if err := validate_required_str(request.image, "image"):
-        return err
     config = DockerDeploymentConfig.from_request(request)
     await _apply_accelerator_type_validation(config)
     await _apply_kata_runtime_switch(config)
@@ -201,9 +197,7 @@ async def start_async(
 
 @sandbox_router.get("/is_alive")
 @handle_exceptions(error_message="get sandbox is alive failed")
-async def is_alive(sandbox_id: str):
-    if err := validate_required_str(sandbox_id, "sandbox_id"):
-        return err
+async def is_alive(sandbox_id: NonBlankStr):
     try:
         status_response = await sandbox_manager.get_status(sandbox_id)
         alive_response = IsAliveResponse(is_alive=status_response.is_alive, message=status_response.host_name)
@@ -215,17 +209,13 @@ async def is_alive(sandbox_id: str):
 
 @sandbox_router.get("/get_sandbox_statistics")
 @handle_exceptions(error_message="get sandbox statistics failed")
-async def get_sandbox_statistics(sandbox_id: str):
-    if err := validate_required_str(sandbox_id, "sandbox_id"):
-        return err
+async def get_sandbox_statistics(sandbox_id: NonBlankStr):
     return RockResponse(result=await sandbox_manager.get_sandbox_statistics(sandbox_id))
 
 
 @sandbox_router.get("/get_status")
 @handle_exceptions(error_message="get sandbox status failed")
-async def get_status(sandbox_id: str, include_all_states: bool = False):
-    if err := validate_required_str(sandbox_id, "sandbox_id"):
-        return err
+async def get_status(sandbox_id: NonBlankStr, include_all_states: bool = False):
     # TODO: do judgement inside operator
     if (
         sandbox_manager.rock_config.nacos_provider is not None
@@ -240,24 +230,18 @@ async def get_status(sandbox_id: str, include_all_states: bool = False):
 @sandbox_router.post("/execute")
 @handle_exceptions(error_message="execute command failed")
 async def execute(command: SandboxCommand) -> RockResponse[CommandResponse]:
-    if err := validate_required_str(command.sandbox_id, "sandbox_id"):
-        return err
     return RockResponse(result=await sandbox_manager.execute(command))
 
 
 @sandbox_router.post("/create_session")
 @handle_exceptions(error_message="create session failed")
 async def create_session(request: SandboxCreateBashSessionRequest) -> RockResponse[CreateBashSessionResponse]:
-    if err := validate_required_str(request.sandbox_id, "sandbox_id"):
-        return err
     return RockResponse(result=await sandbox_manager.create_session(request))
 
 
 @sandbox_router.post("/run_in_session")
 @handle_exceptions(error_message="run in session failed")
 async def run(action: SandboxBashAction) -> RockResponse[BashObservation]:
-    if err := validate_required_str(action.sandbox_id, "sandbox_id"):
-        return err
     result = await sandbox_manager.run_in_session(action)
     if result.exit_code is not None and result.exit_code == -1:
         return RockResponse(status=ResponseStatus.FAILED, error=result.failure_reason)
@@ -267,24 +251,18 @@ async def run(action: SandboxBashAction) -> RockResponse[BashObservation]:
 @sandbox_router.post("/close_session")
 @handle_exceptions(error_message="close session failed")
 async def close_session(request: SandboxCloseBashSessionRequest) -> RockResponse[CloseBashSessionResponse]:
-    if err := validate_required_str(request.sandbox_id, "sandbox_id"):
-        return err
     return RockResponse(result=await sandbox_manager.close_session(request))
 
 
 @sandbox_router.post("/read_file")
 @handle_exceptions(error_message="read file failed")
 async def read_file(request: SandboxReadFileRequest) -> RockResponse[ReadFileResponse]:
-    if err := validate_required_str(request.sandbox_id, "sandbox_id"):
-        return err
     return RockResponse(result=await sandbox_manager.read_file(request))
 
 
 @sandbox_router.post("/write_file")
 @handle_exceptions(error_message="write file failed")
 async def write_file(request: SandboxWriteFileRequest) -> RockResponse[WriteFileResponse]:
-    if err := validate_required_str(request.sandbox_id, "sandbox_id"):
-        return err
     return RockResponse(result=await sandbox_manager.write_file(request))
 
 
@@ -293,18 +271,14 @@ async def write_file(request: SandboxWriteFileRequest) -> RockResponse[WriteFile
 async def upload(
     file: UploadFile = File(...),
     target_path: str = Form(...),
-    sandbox_id: str | None = Form(None),
+    sandbox_id: Annotated[NonBlankStr, Form()] = ...,
 ) -> RockResponse[UploadResponse]:
-    if err := validate_required_str(sandbox_id, "sandbox_id"):
-        return err
     return RockResponse(result=await sandbox_manager.upload(file, target_path, sandbox_id))
 
 
 @sandbox_router.post("/stop")
 @handle_exceptions(error_message="stop sandbox failed")
-async def close(sandbox_id: str = Body(..., embed=True)) -> RockResponse[str]:
-    if err := validate_required_str(sandbox_id, "sandbox_id"):
-        return err
+async def close(sandbox_id: Annotated[NonBlankStr, Body(embed=True)]) -> RockResponse[str]:
     await sandbox_manager.stop(sandbox_id)
     return RockResponse(result=f"{sandbox_id} stopped")
 
@@ -312,20 +286,18 @@ async def close(sandbox_id: str = Body(..., embed=True)) -> RockResponse[str]:
 @sandbox_router.post("/commit")
 @handle_exceptions(error_message="commit sandbox failed")
 async def commit(
-    sandbox_id: str = Body(..., embed=True),
-    image_tag: str = Body(
-        ...,
-        embed=True,
-        example="docker.io/library/nginx:1.25",
-        description="commited image tag: <registry>/<repository>:<tag>",
-    ),
+    sandbox_id: Annotated[NonBlankStr, Body(embed=True)],
+    image_tag: Annotated[
+        NonBlankStr,
+        Body(
+            embed=True,
+            example="docker.io/library/nginx:1.25",
+            description="commited image tag: <registry>/<repository>:<tag>",
+        ),
+    ],
     username: str = Body(..., embed=True),
     password: str = Body(..., embed=True),
 ) -> RockResponse[str]:
-    if err := validate_required_str(sandbox_id, "sandbox_id"):
-        return err
-    if err := validate_required_str(image_tag, "image_tag"):
-        return err
     await sandbox_manager.commit(sandbox_id=sandbox_id, image_tag=image_tag, username=username, password=password)
     return RockResponse(result=f"{sandbox_id} commited")
 

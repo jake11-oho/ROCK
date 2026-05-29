@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, File, Form, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse as _JSONResponse
@@ -28,7 +28,7 @@ from rock.admin.proto.request import (
 from rock.admin.proto.response import BatchSandboxStatusResponse, SandboxListResponse
 from rock.common.exception import handle_exceptions
 from rock.common.port_validation import validate_port_forward_port
-from rock.common.validation import validate_required_str
+from rock.common.validation import NonBlankStr
 from rock.logger import init_logger
 from rock.sandbox.service.sandbox_proxy_service import SandboxProxyService
 from rock.sdk.common.exceptions import BadRequestRockError, InvalidParameterRockError
@@ -112,24 +112,18 @@ def resolve_target_port(request: Request, query_port: int | None, path: str) -> 
 @sandbox_proxy_router.post("/execute")
 @handle_exceptions(error_message="execute command failed")
 async def execute(command: SandboxCommand) -> RockResponse[CommandResponse]:
-    if err := validate_required_str(command.sandbox_id, "sandbox_id"):
-        return err
     return RockResponse(result=await sandbox_proxy_service.execute(command))
 
 
 @sandbox_proxy_router.post("/create_session")
 @handle_exceptions(error_message="create session failed")
 async def create_session(request: SandboxCreateBashSessionRequest) -> RockResponse[CreateBashSessionResponse]:
-    if err := validate_required_str(request.sandbox_id, "sandbox_id"):
-        return err
     return RockResponse(result=await sandbox_proxy_service.create_session(request))
 
 
 @sandbox_proxy_router.post("/run_in_session")
 @handle_exceptions(error_message="run in session failed")
 async def run(action: SandboxBashAction) -> RockResponse[BashObservation]:
-    if err := validate_required_str(action.sandbox_id, "sandbox_id"):
-        return err
     result = await sandbox_proxy_service.run_in_session(action)
     if result.exit_code is not None and result.exit_code == -1:
         return RockResponse(status=ResponseStatus.FAILED, error=result.failure_reason)
@@ -149,32 +143,24 @@ async def batch_get_status(
 @sandbox_proxy_router.post("/close_session")
 @handle_exceptions(error_message="close session failed")
 async def close_session(request: SandboxCloseBashSessionRequest) -> RockResponse[CloseBashSessionResponse]:
-    if err := validate_required_str(request.sandbox_id, "sandbox_id"):
-        return err
     return RockResponse(result=await sandbox_proxy_service.close_session(request))
 
 
 @sandbox_proxy_router.get("/is_alive")
 @handle_exceptions(error_message="get sandbox is alive failed")
-async def is_alive(sandbox_id: str):
-    if err := validate_required_str(sandbox_id, "sandbox_id"):
-        return err
+async def is_alive(sandbox_id: NonBlankStr):
     return RockResponse(result=await sandbox_proxy_service.is_alive(sandbox_id))
 
 
 @sandbox_proxy_router.post("/read_file")
 @handle_exceptions(error_message="read file failed")
 async def read_file(request: SandboxReadFileRequest) -> RockResponse[ReadFileResponse]:
-    if err := validate_required_str(request.sandbox_id, "sandbox_id"):
-        return err
     return RockResponse(result=await sandbox_proxy_service.read_file(request))
 
 
 @sandbox_proxy_router.post("/write_file")
 @handle_exceptions(error_message="write file failed")
 async def write_file(request: SandboxWriteFileRequest) -> RockResponse[WriteFileResponse]:
-    if err := validate_required_str(request.sandbox_id, "sandbox_id"):
-        return err
     return RockResponse(result=await sandbox_proxy_service.write_file(request))
 
 
@@ -183,10 +169,8 @@ async def write_file(request: SandboxWriteFileRequest) -> RockResponse[WriteFile
 async def upload(
     file: UploadFile = File(...),
     target_path: str = Form(...),
-    sandbox_id: str | None = Form(None),
+    sandbox_id: Annotated[NonBlankStr, Form()] = ...,
 ) -> RockResponse[UploadResponse]:
-    if err := validate_required_str(sandbox_id, "sandbox_id"):
-        return err
     return RockResponse(result=await sandbox_proxy_service.upload(file, target_path, sandbox_id))
 
 

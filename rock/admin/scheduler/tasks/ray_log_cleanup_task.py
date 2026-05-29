@@ -82,7 +82,7 @@ class RayLogCleanupTask(BaseTask):
               echo "ray_temp_dir_not_found"
             fi"""
         )
-        result = await runtime.execute(Command(command=command, shell=True, check=False))
+        result = await runtime.execute(Command(command=command, shell=True, check=False, sandbox_id="scheduler-task"))
         output = (result.stdout or "").strip()
         removed = [line.split("=", 1)[1] for line in output.splitlines() if line.startswith("removed=")]
         logger.info(
