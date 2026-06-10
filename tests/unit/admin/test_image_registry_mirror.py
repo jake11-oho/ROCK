@@ -47,49 +47,39 @@ def restore_sandbox_manager():
 
 
 @pytest.fixture
-def stub_temp_auth_client():
-    """Replace TempAuthDockerClient with a stub that records probes and skips real I/O."""
+def stub_manifest_probe():
+    """Replace _http_probe_manifest with a stub that records probes and returns pre-set results."""
     probes: list[dict] = []
     probe_results: list[bool] = []
 
-    class _Stub:
-        def __init__(self, registry=None, username=None, password=None, base_dir=None):
-            self._registry = registry
-            self._username = username
-            self._password = password
+    async def _mock(registry, repo, tag, username=None, password=None, timeout=5):
+        probes.append(
+            {
+                "image": f"{registry}/{repo}:{tag}",
+                "registry": registry,
+                "repo": repo,
+                "tag": tag,
+                "username": username,
+                "password": password,
+            }
+        )
+        return probe_results.pop(0) if probe_results else False
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            return None
-
-        def manifest_inspect(self, image, timeout=5):
-            probes.append(
-                {
-                    "image": image,
-                    "registry": self._registry,
-                    "username": self._username,
-                    "password": self._password,
-                }
-            )
-            return probe_results.pop(0) if probe_results else False
-
-    with patch.object(sandbox_api, "TempAuthDockerClient", _Stub):
+    with patch.object(sandbox_api, "_http_probe_manifest", _mock):
         yield SimpleNamespace(probes=probes, probe_results=probe_results)
 
 
-async def test_empty_mirror_list_is_noop(restore_sandbox_manager, stub_temp_auth_client):
+async def test_empty_mirror_list_is_noop(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager([])
     config = DockerDeploymentConfig(image="python:3.11")
 
     await sandbox_api._apply_image_registry_mirror(config)
 
     assert config.image == "python:3.11"
-    assert stub_temp_auth_client.probes == []
+    assert stub_manifest_probe.probes == []
 
 
-async def test_first_mirror_hit_rewrites_image(restore_sandbox_manager, stub_temp_auth_client):
+async def test_first_mirror_hit_rewrites_image(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager(
         [
             ImageRegistryMirror(registry="rock-a.example.com", namespace="rock-public"),
@@ -97,17 +87,17 @@ async def test_first_mirror_hit_rewrites_image(restore_sandbox_manager, stub_tem
         ]
     )
     config = DockerDeploymentConfig(image="gcr.io/foo/python:3.11")
-    stub_temp_auth_client.probe_results.append(True)
+    stub_manifest_probe.probe_results.append(True)
 
     await sandbox_api._apply_image_registry_mirror(config)
 
     assert config.image == "rock-a.example.com/rock-public/python:3.11"
     assert config.registry_username is None
     assert config.registry_password is None
-    assert len(stub_temp_auth_client.probes) == 1
+    assert len(stub_manifest_probe.probes) == 1
 
 
-async def test_second_mirror_hit_after_first_miss(restore_sandbox_manager, stub_temp_auth_client):
+async def test_second_mirror_hit_after_first_miss(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager(
         [
             ImageRegistryMirror(registry="rock-a.example.com", namespace="rock-public"),
@@ -115,15 +105,15 @@ async def test_second_mirror_hit_after_first_miss(restore_sandbox_manager, stub_
         ]
     )
     config = DockerDeploymentConfig(image="python:3.11")
-    stub_temp_auth_client.probe_results.extend([False, True])
+    stub_manifest_probe.probe_results.extend([False, True])
 
     await sandbox_api._apply_image_registry_mirror(config)
 
     assert config.image == "rock-b.example.com/rock-mirror/python:3.11"
-    assert len(stub_temp_auth_client.probes) == 2
+    assert len(stub_manifest_probe.probes) == 2
 
 
-async def test_full_miss_keeps_original_image(restore_sandbox_manager, stub_temp_auth_client):
+async def test_full_miss_keeps_original_image(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager(
         [
             ImageRegistryMirror(registry="rock-a.example.com", namespace="rock-public"),
@@ -131,7 +121,7 @@ async def test_full_miss_keeps_original_image(restore_sandbox_manager, stub_temp
         ]
     )
     config = DockerDeploymentConfig(image="python:3.11", registry_username="orig", registry_password="orig-pw")
-    stub_temp_auth_client.probe_results.extend([False, False])
+    stub_manifest_probe.probe_results.extend([False, False])
 
     await sandbox_api._apply_image_registry_mirror(config)
 
@@ -140,7 +130,7 @@ async def test_full_miss_keeps_original_image(restore_sandbox_manager, stub_temp
     assert config.registry_password == "orig-pw"
 
 
-async def test_credentials_propagated_on_hit(restore_sandbox_manager, stub_temp_auth_client):
+async def test_credentials_propagated_on_hit(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager(
         [
             ImageRegistryMirror(
@@ -152,18 +142,18 @@ async def test_credentials_propagated_on_hit(restore_sandbox_manager, stub_temp_
         ]
     )
     config = DockerDeploymentConfig(image="python:3.11")
-    stub_temp_auth_client.probe_results.append(True)
+    stub_manifest_probe.probe_results.append(True)
 
     await sandbox_api._apply_image_registry_mirror(config)
 
     assert config.image == "rock-a.example.com/rock-public/python:3.11"
     assert config.registry_username == "mirror-user"
     assert config.registry_password == "mirror-pw"
-    assert stub_temp_auth_client.probes[0]["username"] == "mirror-user"
-    assert stub_temp_auth_client.probes[0]["registry"] == "rock-a.example.com"
+    assert stub_manifest_probe.probes[0]["username"] == "mirror-user"
+    assert stub_manifest_probe.probes[0]["registry"] == "rock-a.example.com"
 
 
-async def test_invalid_mirror_entry_skipped(restore_sandbox_manager, stub_temp_auth_client):
+async def test_invalid_mirror_entry_skipped(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager(
         [
             ImageRegistryMirror(registry="", namespace="rock-public"),
@@ -172,36 +162,36 @@ async def test_invalid_mirror_entry_skipped(restore_sandbox_manager, stub_temp_a
         ]
     )
     config = DockerDeploymentConfig(image="python:3.11")
-    stub_temp_auth_client.probe_results.append(True)
+    stub_manifest_probe.probe_results.append(True)
 
     await sandbox_api._apply_image_registry_mirror(config)
 
     assert config.image == "rock-b.example.com/rock-mirror/python:3.11"
-    assert len(stub_temp_auth_client.probes) == 1
+    assert len(stub_manifest_probe.probes) == 1
 
 
-async def test_candidate_drops_intermediate_namespaces(restore_sandbox_manager, stub_temp_auth_client):
+async def test_candidate_drops_intermediate_namespaces(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager(
         [ImageRegistryMirror(registry="rock-a.example.com", namespace="rock-public")]
     )
     config = DockerDeploymentConfig(image="gcr.io/foo/bar:v1")
-    stub_temp_auth_client.probe_results.append(False)
+    stub_manifest_probe.probe_results.append(False)
 
     await sandbox_api._apply_image_registry_mirror(config)
 
-    assert stub_temp_auth_client.probes[0]["image"] == "rock-a.example.com/rock-public/bar:v1"
+    assert stub_manifest_probe.probes[0]["image"] == "rock-a.example.com/rock-public/bar:v1"
 
 
-async def test_missing_tag_defaults_to_latest(restore_sandbox_manager, stub_temp_auth_client):
+async def test_missing_tag_defaults_to_latest(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager(
         [ImageRegistryMirror(registry="rock-a.example.com", namespace="rock-public")]
     )
     config = DockerDeploymentConfig(image="ubuntu")
-    stub_temp_auth_client.probe_results.append(False)
+    stub_manifest_probe.probe_results.append(False)
 
     await sandbox_api._apply_image_registry_mirror(config)
 
-    assert stub_temp_auth_client.probes[0]["image"] == "rock-a.example.com/rock-public/ubuntu:latest"
+    assert stub_manifest_probe.probes[0]["image"] == "rock-a.example.com/rock-public/ubuntu:latest"
 
 
 async def test_probe_exception_treated_as_miss(restore_sandbox_manager):
@@ -213,45 +203,22 @@ async def test_probe_exception_treated_as_miss(restore_sandbox_manager):
     )
     config = DockerDeploymentConfig(image="python:3.11")
 
-    class _RaisingClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def __enter__(self):
-            raise RuntimeError("docker login failed")
-
-        def __exit__(self, *a):
-            return None
-
     call_count = {"n": 0}
 
-    class _OkClient:
-        def __init__(self, *args, **kwargs):
-            pass
+    async def _mock(registry, repo, tag, username=None, password=None, timeout=5):
+        if registry == "rock-a.example.com":
+            raise RuntimeError("connection failed")
+        call_count["n"] += 1
+        return True
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return None
-
-        def manifest_inspect(self, image, timeout=5):
-            call_count["n"] += 1
-            return True
-
-    def _factory(*args, **kwargs):
-        if kwargs.get("registry") == "rock-a.example.com":
-            return _RaisingClient()
-        return _OkClient()
-
-    with patch.object(sandbox_api, "TempAuthDockerClient", _factory):
+    with patch.object(sandbox_api, "_http_probe_manifest", _mock):
         await sandbox_api._apply_image_registry_mirror(config)
 
     assert config.image == "rock-b.example.com/rock-mirror/python:3.11"
     assert call_count["n"] == 1
 
 
-async def test_digest_reference_skips_mirror_lookup(restore_sandbox_manager, stub_temp_auth_client):
+async def test_digest_reference_skips_mirror_lookup(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager(
         [ImageRegistryMirror(registry="rock-a.example.com", namespace="rock-public")]
     )
@@ -260,10 +227,10 @@ async def test_digest_reference_skips_mirror_lookup(restore_sandbox_manager, stu
     await sandbox_api._apply_image_registry_mirror(config)
 
     assert config.image == "gcr.io/foo/python@sha256:abc123def"
-    assert stub_temp_auth_client.probes == []
+    assert stub_manifest_probe.probes == []
 
 
-async def test_digest_reference_without_registry_also_skips(restore_sandbox_manager, stub_temp_auth_client):
+async def test_digest_reference_without_registry_also_skips(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager(
         [ImageRegistryMirror(registry="rock-a.example.com", namespace="rock-public")]
     )
@@ -272,14 +239,14 @@ async def test_digest_reference_without_registry_also_skips(restore_sandbox_mana
     await sandbox_api._apply_image_registry_mirror(config)
 
     assert config.image == "python@sha256:abc123def"
-    assert stub_temp_auth_client.probes == []
+    assert stub_manifest_probe.probes == []
 
 
-async def test_cached_hit_skips_probe(restore_sandbox_manager, stub_temp_auth_client):
+async def test_cached_hit_skips_probe(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager(
         [ImageRegistryMirror(registry="rock-a.example.com", namespace="rock-public")]
     )
-    stub_temp_auth_client.probe_results.append(True)
+    stub_manifest_probe.probe_results.append(True)
 
     first = DockerDeploymentConfig(image="python:3.11")
     await sandbox_api._apply_image_registry_mirror(first)
@@ -288,17 +255,17 @@ async def test_cached_hit_skips_probe(restore_sandbox_manager, stub_temp_auth_cl
 
     assert first.image == "rock-a.example.com/rock-public/python:3.11"
     assert second.image == "rock-a.example.com/rock-public/python:3.11"
-    assert len(stub_temp_auth_client.probes) == 1
+    assert len(stub_manifest_probe.probes) == 1
 
 
-async def test_cached_miss_skips_probe(restore_sandbox_manager, stub_temp_auth_client):
+async def test_cached_miss_skips_probe(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager(
         [
             ImageRegistryMirror(registry="rock-a.example.com", namespace="rock-public"),
             ImageRegistryMirror(registry="rock-b.example.com", namespace="rock-mirror"),
         ]
     )
-    stub_temp_auth_client.probe_results.extend([False, False])
+    stub_manifest_probe.probe_results.extend([False, False])
 
     first = DockerDeploymentConfig(image="python:3.11")
     await sandbox_api._apply_image_registry_mirror(first)
@@ -307,14 +274,14 @@ async def test_cached_miss_skips_probe(restore_sandbox_manager, stub_temp_auth_c
 
     assert first.image == "python:3.11"
     assert second.image == "python:3.11"
-    assert len(stub_temp_auth_client.probes) == 2
+    assert len(stub_manifest_probe.probes) == 2
 
 
-async def test_expired_cache_entry_reprobes(restore_sandbox_manager, stub_temp_auth_client):
+async def test_expired_cache_entry_reprobes(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager(
         [ImageRegistryMirror(registry="rock-a.example.com", namespace="rock-public")]
     )
-    stub_temp_auth_client.probe_results.extend([False, True])
+    stub_manifest_probe.probe_results.extend([False, True])
 
     first = DockerDeploymentConfig(image="python:3.11")
     await sandbox_api._apply_image_registry_mirror(first)
@@ -325,7 +292,7 @@ async def test_expired_cache_entry_reprobes(restore_sandbox_manager, stub_temp_a
     await sandbox_api._apply_image_registry_mirror(second)
 
     assert second.image == "rock-a.example.com/rock-public/python:3.11"
-    assert len(stub_temp_auth_client.probes) == 2
+    assert len(stub_manifest_probe.probes) == 2
 
 
 async def test_probe_exception_not_cached(restore_sandbox_manager):
@@ -334,18 +301,11 @@ async def test_probe_exception_not_cached(restore_sandbox_manager):
     )
     call_count = {"n": 0}
 
-    class _Client:
-        def __init__(self, *args, **kwargs):
-            pass
+    async def _mock(registry, repo, tag, username=None, password=None, timeout=5):
+        call_count["n"] += 1
+        raise RuntimeError("connection failed")
 
-        def __enter__(self):
-            call_count["n"] += 1
-            raise RuntimeError("docker login failed")
-
-        def __exit__(self, *a):
-            return None
-
-    with patch.object(sandbox_api, "TempAuthDockerClient", _Client):
+    with patch.object(sandbox_api, "_http_probe_manifest", _mock):
         await sandbox_api._apply_image_registry_mirror(DockerDeploymentConfig(image="python:3.11"))
         await sandbox_api._apply_image_registry_mirror(DockerDeploymentConfig(image="python:3.11"))
 
@@ -353,40 +313,40 @@ async def test_probe_exception_not_cached(restore_sandbox_manager):
     assert sandbox_api._MIRROR_PROBE_CACHE == {}
 
 
-async def test_empty_allowlist_disables_lookup_entirely(restore_sandbox_manager, stub_temp_auth_client):
+async def test_empty_allowlist_disables_lookup_entirely(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager(
         [ImageRegistryMirror(registry="rock-a.example.com", namespace="rock-public")],
         allowlist=[],
     )
-    stub_temp_auth_client.probe_results.append(True)
+    stub_manifest_probe.probe_results.append(True)
     config = DockerDeploymentConfig(image="python:3.11")
 
     await sandbox_api._apply_image_registry_mirror(config)
 
     assert config.image == "python:3.11"
-    assert stub_temp_auth_client.probes == []
+    assert stub_manifest_probe.probes == []
 
 
-async def test_wildcard_allowlist_lets_every_image_through(restore_sandbox_manager, stub_temp_auth_client):
+async def test_wildcard_allowlist_lets_every_image_through(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager(
         [ImageRegistryMirror(registry="rock-a.example.com", namespace="rock-public")],
         allowlist=["*"],
     )
-    stub_temp_auth_client.probe_results.append(True)
+    stub_manifest_probe.probe_results.append(True)
     config = DockerDeploymentConfig(image="gcr.io/foo/python:3.11")
 
     await sandbox_api._apply_image_registry_mirror(config)
 
     assert config.image == "rock-a.example.com/rock-public/python:3.11"
-    assert len(stub_temp_auth_client.probes) == 1
+    assert len(stub_manifest_probe.probes) == 1
 
 
-async def test_prefix_allowlist_matches_only_listed_images(restore_sandbox_manager, stub_temp_auth_client):
+async def test_prefix_allowlist_matches_only_listed_images(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager(
         [ImageRegistryMirror(registry="rock-a.example.com", namespace="rock-public")],
         allowlist=["aaaaaa/bbb/", "swe-bench:"],
     )
-    stub_temp_auth_client.probe_results.extend([True, True])
+    stub_manifest_probe.probe_results.extend([True, True])
 
     allowed = DockerDeploymentConfig(image="aaaaaa/bbb/swe-bench:astropy__astropy-12907")
     await sandbox_api._apply_image_registry_mirror(allowed)
@@ -396,24 +356,24 @@ async def test_prefix_allowlist_matches_only_listed_images(restore_sandbox_manag
     await sandbox_api._apply_image_registry_mirror(bare_prefix)
     assert bare_prefix.image == "rock-a.example.com/rock-public/swe-bench:python__python-1"
 
-    assert len(stub_temp_auth_client.probes) == 2
+    assert len(stub_manifest_probe.probes) == 2
 
 
-async def test_prefix_allowlist_skips_non_matching_image(restore_sandbox_manager, stub_temp_auth_client):
+async def test_prefix_allowlist_skips_non_matching_image(restore_sandbox_manager, stub_manifest_probe):
     sandbox_api.sandbox_manager = _make_manager(
         [ImageRegistryMirror(registry="rock-a.example.com", namespace="rock-public")],
         allowlist=["swe-bench:"],
     )
-    stub_temp_auth_client.probe_results.append(True)
+    stub_manifest_probe.probe_results.append(True)
     config = DockerDeploymentConfig(image="python:3.11")
 
     await sandbox_api._apply_image_registry_mirror(config)
 
     assert config.image == "python:3.11"
-    assert stub_temp_auth_client.probes == []
+    assert stub_manifest_probe.probes == []
 
 
-async def test_nacos_mirrors_override_rock_config(restore_sandbox_manager, stub_temp_auth_client):
+async def test_nacos_mirrors_override_rock_config(restore_sandbox_manager, stub_manifest_probe):
     """When nacos_provider returns mirror config, it takes precedence over rock_config fields."""
     nacos_provider = MagicMock()
     nacos_provider.get_config = AsyncMock(
@@ -431,7 +391,7 @@ async def test_nacos_mirrors_override_rock_config(restore_sandbox_manager, stub_
             nacos_provider=nacos_provider,
         )
     )
-    stub_temp_auth_client.probe_results.append(True)
+    stub_manifest_probe.probe_results.append(True)
     config = DockerDeploymentConfig(image="python:3.11")
 
     await sandbox_api._apply_image_registry_mirror(config)
@@ -439,7 +399,7 @@ async def test_nacos_mirrors_override_rock_config(restore_sandbox_manager, stub_
     assert config.image == "nacos-mirror.example.com/nacos-ns/python:3.11"
 
 
-async def test_nacos_without_mirror_keys_falls_back_to_rock_config(restore_sandbox_manager, stub_temp_auth_client):
+async def test_nacos_without_mirror_keys_falls_back_to_rock_config(restore_sandbox_manager, stub_manifest_probe):
     """When nacos_provider has no mirror keys, fall back to rock_config fields."""
     nacos_provider = MagicMock()
     nacos_provider.get_config = AsyncMock(return_value={"sandbox_config": {}})
@@ -450,7 +410,7 @@ async def test_nacos_without_mirror_keys_falls_back_to_rock_config(restore_sandb
             nacos_provider=nacos_provider,
         )
     )
-    stub_temp_auth_client.probe_results.append(True)
+    stub_manifest_probe.probe_results.append(True)
     config = DockerDeploymentConfig(image="python:3.11")
 
     await sandbox_api._apply_image_registry_mirror(config)

@@ -1,7 +1,9 @@
 import math
+import re
 import time
 from typing import Annotated, Any
 
+import httpx
 from fastapi import APIRouter, Body, Depends, File, Form, UploadFile
 
 from rock.actions import (
@@ -41,7 +43,6 @@ from rock.common.exception import handle_exceptions
 from rock.common.validation import NonBlankStr
 from rock.config import ImageRegistryMirror
 from rock.deployments.config import AcceleratorType, DockerDeploymentConfig
-from rock.deployments.docker_client import TempAuthDockerClient
 from rock.logger import init_logger
 from rock.sandbox.sandbox_manager import SandboxManager
 from rock.sdk.common.exceptions import BadRequestRockError
@@ -126,6 +127,46 @@ def _apply_mirror_hit(config: DockerDeploymentConfig, mirror, candidate: str) ->
         config.registry_password = mirror.password
 
 
+def _parse_bearer_challenge(header: str) -> dict[str, str]:
+    """Parse ``realm``, ``service``, ``scope`` from a Bearer WWW-Authenticate header."""
+    return {m.group(1): m.group(2) for m in re.finditer(r'(\w+)="([^"]*)"', header)}
+
+
+async def _http_probe_manifest(
+    registry: str,
+    repo: str,
+    tag: str,
+    username: str | None = None,
+    password: str | None = None,
+    timeout: float = 5,
+) -> bool:
+    """Check whether ``repo:tag`` exists on *registry* via the v2 manifest API."""
+    url = f"https://{registry}/v2/{repo}/manifests/{tag}"
+    headers = {"Accept": "application/vnd.docker.distribution.manifest.v2+json"}
+    auth = (username, password) if username and password else None
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.get(url, headers=headers, auth=auth)
+
+        if resp.status_code == 401 and "www-authenticate" in resp.headers:
+            www_auth = resp.headers["www-authenticate"]
+            if www_auth.startswith("Bearer "):
+                params = _parse_bearer_challenge(www_auth)
+                realm = params.get("realm", "")
+                service = params.get("service", "")
+                scope = params.get("scope", "")
+                token_url = f"{realm}?service={service}&scope={scope}"
+                token_resp = await client.get(token_url, auth=auth)
+                if token_resp.status_code == 200:
+                    data = token_resp.json()
+                    token = data.get("token") or data.get("access_token")
+                    if token:
+                        headers["Authorization"] = f"Bearer {token}"
+                        resp = await client.get(url, headers=headers)
+
+        return resp.status_code == 200
+
+
 async def _apply_image_registry_mirror(config: DockerDeploymentConfig) -> None:
     """Rewrite ``config.image`` to an internal mirror copy when one exists.
 
@@ -135,7 +176,7 @@ async def _apply_image_registry_mirror(config: DockerDeploymentConfig) -> None:
     considered.
 
     For allowed images, iterates ``rock_config.image_registry_mirrors`` in
-    declared order, probes with ``docker manifest inspect`` and uses the first
+    declared order, probes via the registry v2 manifest API and uses the first
     hit. Digest references (``name@sha256:...``) are skipped entirely.
     """
     nacos = sandbox_manager.rock_config.nacos_provider
@@ -168,6 +209,8 @@ async def _apply_image_registry_mirror(config: DockerDeploymentConfig) -> None:
     if ":" not in name_tag:
         name_tag = f"{name_tag}:{ImageUtil.DEFAULT_TAG}"
     original_image = config.image
+
+    image_name, tag = name_tag.rsplit(":", 1)
     for mirror in mirrors:
         if not mirror.registry or not mirror.namespace:
             continue
@@ -182,12 +225,13 @@ async def _apply_image_registry_mirror(config: DockerDeploymentConfig) -> None:
             continue
 
         try:
-            with TempAuthDockerClient(
-                registry=mirror.registry if mirror.username else None,
+            hit = await _http_probe_manifest(
+                registry=mirror.registry,
+                repo=f"{mirror.namespace}/{image_name}",
+                tag=tag,
                 username=mirror.username,
                 password=mirror.password,
-            ) as client:
-                hit = client.manifest_inspect(candidate, timeout=5)
+            )
         except Exception as e:
             logger.warning(f"image registry mirror probe failed for {candidate!r}: {e}")
             continue
