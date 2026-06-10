@@ -200,6 +200,29 @@ class TempAuthDockerClient:
         except Exception as e:
             raise TempAuthDockerClientError(f"Docker pull error: {e}")
 
+    def manifest_inspect(self, image: str, timeout: int = 5) -> bool:
+        """Probe whether an image exists in its remote registry without pulling layers."""
+        if not self._temp_dir:
+            return False
+
+        try:
+            result = subprocess.run(
+                [
+                    "docker",
+                    "--config",
+                    str(self._temp_dir),
+                    "manifest",
+                    "inspect",
+                    image,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout,
+            )
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+
     def is_image_available(self, image: str) -> bool:
         """Check if an image is available locally.
 
