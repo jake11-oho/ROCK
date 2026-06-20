@@ -299,11 +299,7 @@ class Sandbox(AbstractSandbox):
         response = await HttpUtils.post(url, headers, data)
         logging.debug(f"Delete sandbox response: {response}")
         if "Success" != response.get("status"):
-            result = response.get("result", None)
-            if result is not None:
-                rock_response = SandboxResponse(**result)
-                raise_for_code(rock_response.code, f"Failed to delete sandbox: {response}")
-            raise Exception(f"Failed to delete sandbox: {response}")
+            raise_for_envelope_or_result(response, "Failed to delete sandbox", "Failed to delete sandbox")
 
     async def restart(self):
         """Restart a stopped sandbox using 'docker start' (reuses existing container).

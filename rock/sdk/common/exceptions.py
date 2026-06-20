@@ -53,45 +53,28 @@ def raise_for_code(code: codes, message: str):
 
 
 def from_rock_exception(e: RockException) -> SandboxResponse:
-    """Legacy helper: build a ``SandboxResponse`` payload to stuff into
-    ``RockResponse.result`` on error.
-
-    Kept for backward-compat with SDKs that read the structured error from
-    ``result.code`` / ``result.failure_reason``. New consumers should read
-    ``code`` from the response envelope (``RockResponse.code``) instead;
-    populating it on ``result`` will be removed once all SDK consumers have
-    migrated.
-    """
-    return SandboxResponse(code=e.code, failure_reason=str(e))
+    """Backward-compat: populate ``result.code`` for older SDKs."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return SandboxResponse(code=e.code, failure_reason=str(e))
 
 
 def raise_for_envelope_or_result(response: dict, container_message: str, fallback_message: str) -> None:
-    """Raise a typed ``RockException`` based on the failed response envelope.
-
-    Prefers the envelope ``code`` field (the new contract). Falls back to the
-    legacy ``result.code`` payload (``SandboxResponse``-shaped) for
-    compatibility with older admin servers and emits a ``DeprecationWarning``
-    so callers know to upgrade. Raises a generic ``Exception`` when neither
-    is present.
-
-    Args:
-        response: Parsed JSON response body from the admin API.
-        container_message: Message passed to ``raise_for_code`` describing the
-            failed operation.
-        fallback_message: Message for the generic ``Exception`` raised when
-            no structured code can be recovered.
-    """
+    """Raise from envelope ``code``, fall back to legacy ``result.code``."""
     envelope_code = response.get("code")
     if envelope_code is not None:
         raise_for_code(envelope_code, f"{container_message}: {response}")
     result = response.get("result", None)
     if result is not None:
-        warnings.warn(
-            "Reading the error code from `result` is deprecated; upgrade the "
-            "rock admin so the envelope `code` field is populated.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        rock_response = SandboxResponse(**result)
-        raise_for_code(rock_response.code, f"{container_message}: {response}")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            rock_response = SandboxResponse(**result)
+        if rock_response.code is not None:
+            warnings.warn(
+                "Reading the error code from `result` is deprecated; upgrade the "
+                "rock admin so the envelope `code` field is populated.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            raise_for_code(rock_response.code, f"{container_message}: {response}")
     raise Exception(f"{fallback_message}: {response}")

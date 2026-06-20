@@ -16,10 +16,7 @@ class BaseResponse(BaseModel):
     message: str | None = None
     error: str | None = None
     code: codes | None = None
-    """Structured error code on the envelope. Preferred over reading
-    ``result.code`` (the legacy ``SandboxResponse`` payload), which is kept
-    populated only for backward-compat on endpoints whose ``T`` is a
-    ``SandboxResponse`` subclass."""
+    """Structured error code on the envelope; preferred over ``result.code``."""
 
 
 T = TypeVar("T")

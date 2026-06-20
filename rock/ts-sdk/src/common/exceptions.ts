@@ -85,6 +85,18 @@ export function raiseForCode(code: Codes | null | undefined, message: string): v
 }
 
 /**
+ * Raise from envelope code, or throw a generic Error as fallback.
+ */
+export function raiseForEnvelopeOrResult(
+  response: { status?: string; code?: number; error?: string; result?: unknown },
+  message: string
+): never {
+  raiseForCode(response.code, `${message}: ${JSON.stringify(response)}`);
+  const errorDetail = response.error ? `, error=${response.error}` : '';
+  throw new Error(`${message}: status=${response.status}${errorDetail}, result=${JSON.stringify(response.result)}`);
+}
+
+/**
  * Convert RockException to SandboxResponse
  */
 export function fromRockException(e: RockException): SandboxResponse {

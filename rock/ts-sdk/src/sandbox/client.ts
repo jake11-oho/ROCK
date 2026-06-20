@@ -4,7 +4,7 @@
 
 import { randomUUID } from 'crypto';
 import { initLogger } from '../logger.js';
-import { raiseForCode, InternalServerRockError } from '../common/exceptions.js';
+import { raiseForEnvelopeOrResult, InternalServerRockError } from '../common/exceptions.js';
 import { HttpUtils } from '../utils/http.js';
 import { sleep } from '../utils/retry.js';
 import {
@@ -236,9 +236,7 @@ export class Sandbox extends AbstractSandbox {
     logger.debug(`Start sandbox response: ${JSON.stringify(response)}`);
 
     if (response.status !== 'Success') {
-      // Check for error code and throw appropriate exception
-      raiseForCode(response.code, `Failed to start sandbox: ${JSON.stringify(response)}`);
-      throw new Error(`Failed to start sandbox: ${JSON.stringify(response)}`);
+      raiseForEnvelopeOrResult(response, 'Failed to start sandbox');
     }
 
     // Response is already camelCase (converted by HTTP layer)
@@ -316,9 +314,7 @@ export class Sandbox extends AbstractSandbox {
     const response = await HttpUtils.get<SandboxStatusResponse>(url, headers);
 
     if (response.status !== 'Success') {
-      const errorDetail = response.error ? `, error=${response.error}` : '';
-      raiseForCode(response.code, `Failed to get status: status=${response.status}${errorDetail}, result=${JSON.stringify(response.result)}`);
-      throw new Error(`Failed to get status: status=${response.status}${errorDetail}, result=${JSON.stringify(response.result)}`);
+      raiseForEnvelopeOrResult(response, 'Failed to get status');
     }
 
     // Validate response with Zod schema (similar to Python: SandboxStatusResponse(**result))
@@ -351,9 +347,7 @@ export class Sandbox extends AbstractSandbox {
     );
 
     if (response.status !== 'Success') {
-      const errorDetail = response.error ? `, error=${response.error}` : '';
-      raiseForCode(response.code, `Failed to execute command: status=${response.status}${errorDetail}, result=${JSON.stringify(response.result)}`);
-      throw new Error(`Failed to execute command: status=${response.status}${errorDetail}, result=${JSON.stringify(response.result)}`);
+      raiseForEnvelopeOrResult(response, 'Failed to execute command');
     }
 
     // Validate response with Zod schema (similar to Python: CommandResponse(**result))
@@ -376,9 +370,7 @@ export class Sandbox extends AbstractSandbox {
     );
 
     if (response.status !== 'Success') {
-      const errorDetail = response.error ? `, error=${response.error}` : '';
-      raiseForCode(response.code, `Failed to create session: status=${response.status}${errorDetail}, result=${JSON.stringify(response.result)}`);
-      throw new Error(`Failed to create session: status=${response.status}${errorDetail}, result=${JSON.stringify(response.result)}`);
+      raiseForEnvelopeOrResult(response, 'Failed to create session');
     }
 
     // Validate response with Zod schema (similar to Python: CreateBashSessionResponse(**result))
@@ -400,9 +392,7 @@ export class Sandbox extends AbstractSandbox {
     );
 
     if (response.status !== 'Success') {
-      const errorDetail = response.error ? `, error=${response.error}` : '';
-      raiseForCode(response.code, `Failed to close session: status=${response.status}${errorDetail}, result=${JSON.stringify(response.result)}`);
-      throw new Error(`Failed to close session: status=${response.status}${errorDetail}, result=${JSON.stringify(response.result)}`);
+      raiseForEnvelopeOrResult(response, 'Failed to close session');
     }
 
     // Validate response with Zod schema (similar to Python: CloseSessionResponse(**result))
@@ -460,9 +450,7 @@ export class Sandbox extends AbstractSandbox {
     );
 
     if (response.status !== 'Success') {
-      const errorDetail = response.error ? `, error=${response.error}` : '';
-      raiseForCode(response.code, `Failed to run in session: status=${response.status}${errorDetail}, result=${JSON.stringify(response.result)}`);
-      throw new Error(`Failed to run in session: status=${response.status}${errorDetail}, result=${JSON.stringify(response.result)}`);
+      raiseForEnvelopeOrResult(response, 'Failed to run in session');
     }
 
     // Validate response with Zod schema (similar to Python: Observation(**result))
