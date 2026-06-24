@@ -23,7 +23,7 @@ from rock.deployments.config import DockerDeploymentConfig
 from rock.deployments.constants import Port, Status
 from rock.deployments.docker_client import TempAuthDockerClient, TempAuthDockerClientError
 from rock.deployments.hooks.abstract import CombinedDeploymentHook, DeploymentHook
-from rock.deployments.runtime_env import DockerRuntimeEnv, LocalRuntimeEnv, PipRuntimeEnv, UvRuntimeEnv
+from rock.deployments.runtime_env import ConfigurableRuntimeEnv, DockerRuntimeEnv, LocalRuntimeEnv, PipRuntimeEnv, UvRuntimeEnv
 from rock.deployments.sandbox_validator import DockerSandboxValidator
 from rock.deployments.status import PersistedServiceStatus, ServiceStatus
 from rock.logger import init_logger
@@ -83,7 +83,9 @@ class DockerDeployment(AbstractDeployment):
 
         if self._config.container_name:
             self.set_container_name(self._config.container_name)
-        if env_vars.ROCK_WORKER_ENV_TYPE == "docker":
+        if self._config.image_os_profile:
+            self._runtime_env = ConfigurableRuntimeEnv(self._config.image_os_profile.get("runtime_env", {}))
+        elif env_vars.ROCK_WORKER_ENV_TYPE == "docker":
             self._runtime_env = DockerRuntimeEnv()
         elif env_vars.ROCK_WORKER_ENV_TYPE == "local":
             self._runtime_env = LocalRuntimeEnv(self._config.runtime_config)
@@ -245,7 +247,7 @@ class DockerDeployment(AbstractDeployment):
             cmd,
         ]
 
-    def _pull_image(self) -> None:
+    def _pull_image(self, pull_timeout: int = 600) -> None:
         """Pull image using temporary authentication.
 
         Uses TempAuthDockerClient to ensure credentials are isolated
@@ -277,7 +279,7 @@ class DockerDeployment(AbstractDeployment):
                     username=self._config.registry_username,
                     password=self._config.registry_password,
                 ) as client:
-                    client.pull(self._config.image)
+                    client.pull(self._config.image, timeout=pull_timeout)
 
             self._service_status.update_status(
                 phase_name="image_pull", status=Status.SUCCESS, message="image pull success"
@@ -747,8 +749,10 @@ class DockerDeployment(AbstractDeployment):
         self._service_status.set_sandbox_id(self._container_name)
         executor = get_executor()
         loop = asyncio.get_running_loop()
+        startup_timeout = self._config.startup_timeout or 600.0
+        deadline = time.monotonic() + startup_timeout
 
-        await loop.run_in_executor(executor, self._pull_image)
+        await loop.run_in_executor(executor, self._pull_image, int(startup_timeout))
         if self._config.python_standalone_dir is not None:
             image_id = self._build_image()
         else:
@@ -850,8 +854,9 @@ class DockerDeployment(AbstractDeployment):
             RemoteSandboxRuntimeConfig(port=self._config.port, timeout=self._runtime_timeout)
         )
         self._runtime.set_executor(executor)
+        remaining = max(deadline - time.monotonic(), 1.0)
         with StageTimer("startup_timing", f"[{self._container_name}] Wait until alive", logger):
-            await self._wait_until_alive(timeout=self._config.startup_timeout)
+            await self._wait_until_alive(timeout=remaining)
         if self._config.enable_auto_clear:
             self._check_stop_task = asyncio.create_task(self._check_stop())
 
@@ -879,6 +884,7 @@ class DockerDeployment(AbstractDeployment):
         mirrors = self._config.runtime_config.instance_registry_mirrors
         if mirrors:
             args.extend(["-e", f"INSTANCE_ROCK_REGISTRY={','.join(mirrors)}"])
+        args.extend(self._runtime_env.get_extra_env_args(self._config))
         return args
 
     def _prepare_timezone_mount(self) -> list[str]:
@@ -989,7 +995,7 @@ class DockerDeployment(AbstractDeployment):
 
         # Wait until container is alive
         with StageTimer("startup_timing", f"[{self._container_name}] Wait until alive", logger):
-            await self._wait_until_alive(timeout=self._config.startup_timeout)
+            await self._wait_until_alive(timeout=self._config.startup_timeout or 600.0)
 
         # Re-enable auto-clear if configured
         if self._config.enable_auto_clear:
