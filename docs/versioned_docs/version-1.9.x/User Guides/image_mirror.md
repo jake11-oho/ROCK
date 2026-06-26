@@ -55,7 +55,6 @@ Images can also be provided via `-f <path>` (supports `txt`, `jsonl`, `skopeo` f
 | `--source-username` | *(none)* | Source registry username |
 | `--source-password` | *(none)* | Source registry password |
 | `--target-registry` | Built-in | Target registry URL. Overrides the region default when explicitly provided |
-| `--force, -F` | `false` | Force re-transfer even if target digest matches |
 | `--resume` | `false` | Resume from progress file |
 
 > **Note:** The target registry credentials are built into `rockcli` by default. In most cases you only need to provide the source images to start mirroring. Run `rockcli image mirror --help` for the full option list.
@@ -111,12 +110,14 @@ After mirroring completes, `rockcli` will output the mirrored image address. Use
 ## How It Works
 
 1. **Parse** — Source images are parsed from the command line arguments (or from a file if `-f` is used).
-2. **Check** — The tool logs into the target registry and checks if the image already exists. If it does, the image is skipped.
+2. **Check** — The tool logs into the target registry and checks if the image already exists. If it does, the image is skipped (overwriting is not supported).
 3. **Pull** — The image is pulled from the source registry (logging in first if source credentials are provided).
 4. **Tag** — The image is re-tagged to match the target registry URL while preserving the original namespace, name, and tag.
 5. **Push** — The re-tagged image is pushed to the target registry.
 
 Each image mirror operation retries up to 3 times on failure.
+
+> **Note:** The target registry does not support overwriting existing images. If you need to update the image content, modify the tag and mirror again.
 
 ### Image Name Mapping
 
