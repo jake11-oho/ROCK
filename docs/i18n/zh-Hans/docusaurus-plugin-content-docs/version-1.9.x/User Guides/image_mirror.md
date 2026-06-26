@@ -15,7 +15,7 @@ ROCK 使用统一的 ACR（阿里云容器镜像服务）—— **rock-instances
 | 新加坡 (ap-southeast-1) | `rock-instances-registry.ap-southeast-1.cr.aliyuncs.com` | 默认转储目标 |
 | 上海 (cn-hangzhou) | `rock-instances-registry.cn-hangzhou.cr.aliyuncs.com` | 通过 ACR 跨区域同步自新加坡 |
 
-默认情况下，`rock image mirror` 将镜像推送到**新加坡**仓库，然后由 ACR 内置的跨区域同步机制自动复制到上海。
+默认情况下，`rockcli image mirror` 将镜像推送到**新加坡**仓库，然后由 ACR 内置的跨区域同步机制自动复制到上海。
 
 > **注意：** ACR 跨区域同步在高负载时可能出现任务阻塞或延迟。如果需要镜像立即在上海可用，可以通过指定 `--cluster vpc-nt-a` 使用 remote 模式直接转储到上海仓库（参见[直接转储到上海](#直接转储到上海)）。
 
@@ -30,111 +30,83 @@ bash -c "$(curl -fsSL http://xrl.alibaba-inc.com/install_beta.sh)"
 验证安装：
 
 ```bash
-rock --help
+rockcli --help
 ```
-
-## 准备镜像列表
-
-`rock image mirror` 命令读取一个 JSONL 文件，每行是一个包含 `docker_image` 字段的 JSON 对象，遵循 SWE-bench 实例格式。
-
-**示例文件**（`images.jsonl`）：
-
-```jsonl
-{"instance_id": "example_1", "docker_image": "docker.io/library/python:3.11"}
-{"instance_id": "example_2", "docker_image": "ghcr.io/my-org/my-image:v1.0"}
-{"instance_id": "example_3", "docker_image": "ubuntu:22.04"}
-```
-
-`docker_image` 字段必须是完整的镜像引用，包含 registry（如非 Docker Hub）、namespace、镜像名和 tag。如果未指定 tag，默认使用 `latest`。
 
 ## 命令参考
 
-### `rock image mirror`
+### `rockcli image mirror`
 
 将镜像从源仓库转储到 ROCK 目标仓库。
 
 ```bash
-rock image mirror -f <file> \
-  [--target-registry <target_registry_url>] \
-  [--target-username <target_username>] \
-  [--target-password <target_password>] \
-  [--source-registry <source_registry_url>] \
-  [--source-username <source_username>] \
-  [--source-password <source_password>] \
-  [--mode <local|remote>] \
-  [--concurrency <1-50>]
+rockcli image mirror <image> [<image>...] [options]
 ```
 
-#### 必填参数
+也可通过 `-f <path>` 提供镜像列表（支持 `txt`、`jsonl`、`skopeo` 格式）。
 
-| 参数 | 说明 |
-|------|------|
-| `-f, --file` | 包含镜像列表的 JSONL 文件路径 |
-
-#### 可选参数
+#### 关键选项
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--target-registry` | 内置（rock-instances 新加坡） | 目标 ACR 仓库地址，默认指向 ROCK 镜像仓库，通常无需指定 |
-| `--target-username` | 内置 | 目标仓库用户名，默认使用内置的 ROCK ACR 凭证 |
-| `--target-password` | 内置 | 目标仓库密码，默认使用内置的 ROCK ACR 凭证 |
-| `--source-registry` | *（无）* | 源仓库地址。仅当源仓库需要认证时使用 |
+| `--mode` | `skopeo` | `skopeo`（推荐，在沙箱中 skopeo copy）、`remote`（在沙箱中 docker pull/tag/push）、`local`（本机 Docker） |
+| `--concurrency` | *（自动）* | `skopeo`/`remote`：沙箱数量；`local`：本机并行镜像数 |
+| `-c, --cluster` | *（无）* | 集群路由提示。`vpc-sg-*` 走国外 ACR，其他 `vpc-*` 走国内 ACR |
 | `--source-username` | *（无）* | 源仓库用户名 |
 | `--source-password` | *（无）* | 源仓库密码 |
-| `--mode` | `local` | 转储模式：`local`（在本机执行）或 `remote`（在 ROCK 沙箱中分布式执行） |
-| `--concurrency` | `3` | 并发转储任务数（1–50），仅在 `remote` 模式下生效 |
+| `--target-registry` | 内置 | 目标仓库地址，显式传入时覆盖区域默认仓 |
+| `--force, -F` | `false` | 目标 digest 相同时也强制重新传输 |
+| `--resume` | `false` | 从进度文件恢复 |
 
-> **说明：** `--target-registry`、`--target-username` 和 `--target-password` 已内置于 `rockcli` 中，默认指向 ROCK ACR（rock-instances）。大多数情况下只需提供 `-f` 即可开始转储。
+> **说明：** 目标仓库凭证已内置于 `rockcli` 中。大多数情况下只需提供源镜像即可开始转储。完整选项请运行 `rockcli image mirror --help`。
 
 ## 使用示例
 
-### 转储公共镜像（Local 模式）
+### 转储公共镜像
 
-对于来自公共仓库（Docker Hub 等）的镜像，无需源仓库认证，只需提供镜像列表文件即可：
+对于来自公共仓库（Docker Hub 等）的镜像，无需源仓库认证：
 
 ```bash
-rock image mirror -f images.jsonl
+rockcli image mirror ex-registry-vpc.ap-southeast-1.cr.aliyuncs.com/chatos/base:python3.11
 ```
 
-目标仓库凭证将自动使用内置默认值。
+同时转储多个镜像：
 
-### 转储私有镜像（Local 模式）
+```bash
+rockcli image mirror ex-registry-vpc.ap-southeast-1.cr.aliyuncs.com/chatos/base:python3.11 ubuntu:22.04
+```
+
+### 转储私有镜像
 
 当源镜像需要认证时，提供源仓库凭证：
 
 ```bash
-rock image mirror -f images.jsonl \
-  --source-registry ghcr.io \
+rockcli image mirror ghcr.io/my-org/my-image:v1.0 \
   --source-username <your_source_username> \
   --source-password <your_source_password>
 ```
 
-### 转储镜像（Remote 模式）
+### 使用本地 Docker 转储
 
-对于大规模镜像转储，使用 `remote` 模式将任务分发到多个 ROCK 沙箱中执行。需要通过全局参数或配置文件配置 `--auth-token` 和 `--cluster`：
+使用 `local` 模式通过本机 Docker 守护进程转储，而非沙箱：
 
 ```bash
-rock --auth-token <token> --cluster <cluster_name> \
-  image mirror -f images.jsonl \
-  --mode remote \
-  --concurrency 10
+rockcli image mirror ex-registry-vpc.ap-southeast-1.cr.aliyuncs.com/chatos/base:python3.11 --mode local
 ```
 
 ### 直接转储到上海
 
-如果 ACR 跨区域同步出现阻塞或延迟，可以绕过同步机制，直接转储到上海仓库。指定 `--cluster vpc-nt-a` 在上海集群上执行远程任务，并覆盖 `--target-registry` 为上海地址：
+如果 ACR 跨区域同步出现阻塞或延迟，可以通过 `--cluster vpc-nt-a` 直接转储到上海仓库：
 
 ```bash
-rock --auth-token <token> --cluster vpc-nt-a \
-  image mirror -f images.jsonl \
-  --mode remote \
-  --concurrency 10 \
+rockcli image mirror ex-registry-vpc.ap-southeast-1.cr.aliyuncs.com/chatos/base:python3.11 \
+  --cluster vpc-nt-a \
   --target-registry rock-instances-registry.cn-hangzhou.cr.aliyuncs.com
 ```
 
 ## 工作原理
 
-1. **解析** —— 逐行读取 JSONL 文件，提取 `docker_image` 字段。
+1. **解析** —— 解析命令行提供的源镜像（或通过 `-f` 从文件读取）。
 2. **检查** —— 登录目标仓库，检查镜像是否已存在。如果已存在则跳过。
 3. **拉取** —— 从源仓库拉取镜像（如提供了源仓库凭证，会先登录）。
 4. **打标签** —— 将镜像重新打标签为目标仓库地址，保留原始的 namespace、镜像名和 tag。
@@ -147,11 +119,11 @@ rock --auth-token <token> --cluster vpc-nt-a \
 原始镜像名称映射到目标仓库时，保留其原有结构：
 
 ```
+源镜像: ex-registry-vpc.ap-southeast-1.cr.aliyuncs.com/chatos/base:python3.11
+目标:   rock-instances-registry.ap-southeast-1.cr.aliyuncs.com/chatos/base:python3.11
+
 源镜像: ghcr.io/my-org/my-image:v1.0
 目标:   rock-instances-registry.ap-southeast-1.cr.aliyuncs.com/my-org/my-image:v1.0
-
-源镜像: docker.io/library/python:3.11
-目标:   rock-instances-registry.ap-southeast-1.cr.aliyuncs.com/library/python:3.11
 ```
 
 ## 转储结果
