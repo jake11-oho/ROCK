@@ -37,7 +37,7 @@ class TestResolveCompose:
             changed = await resolve_compose(cf, resolver=resolver)
         assert changed
         data = yaml.safe_load(cf.read_text())
-        assert data["services"]["web"]["image"] == "reg.example.com/ns/app:v1"
+        assert data["services"]["web"]["image"] == "reg.example.com/org/app:v1"
 
     async def test_no_change_on_miss(self, tmp_path, resolver, monkeypatch):
         monkeypatch.setenv(ROCK_REGISTRY_ENV, "reg.example.com/ns")
@@ -101,7 +101,7 @@ class TestResolveCompose:
         data = yaml.safe_load(cf.read_text())
         assert "build" in data["services"]["builder"]
         assert "image" not in data["services"]["builder"]
-        assert data["services"]["web"]["image"] == "reg.example.com/ns/app:v1"
+        assert data["services"]["web"]["image"] == "reg.example.com/org/app:v1"
         assert probe.await_count == 1
 
 

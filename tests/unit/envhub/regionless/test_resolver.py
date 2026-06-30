@@ -95,6 +95,44 @@ class TestBuildCandidate:
         )
 
 
+class TestBuildCandidateWithOriginalNamespace:
+    def test_preserves_original_namespace(self):
+        assert (
+            RockRegistryResolver.build_candidate_with_original_namespace(
+                "ghcr.io/swebench/foo:v1", "reg.aliyuncs.com/fixed-ns"
+            )
+            == "reg.aliyuncs.com/swebench/foo:v1"
+        )
+
+    def test_no_registry_host_in_image(self):
+        assert (
+            RockRegistryResolver.build_candidate_with_original_namespace(
+                "swebench/foo:latest", "reg.aliyuncs.com/fixed-ns"
+            )
+            == "reg.aliyuncs.com/swebench/foo:latest"
+        )
+
+    def test_deeply_nested_namespaces(self):
+        assert (
+            RockRegistryResolver.build_candidate_with_original_namespace(
+                "gcr.io/project/subproj/image:v1", "reg.aliyuncs.com/ns"
+            )
+            == "reg.aliyuncs.com/project/subproj/image:v1"
+        )
+
+    def test_default_tag_when_missing(self):
+        assert (
+            RockRegistryResolver.build_candidate_with_original_namespace("ghcr.io/org/app", "reg.example.com/ns")
+            == "reg.example.com/org/app:latest"
+        )
+
+    def test_registry_without_namespace(self):
+        assert (
+            RockRegistryResolver.build_candidate_with_original_namespace("ghcr.io/org/app:v1", "reg.example.com")
+            == "reg.example.com/org/app:v1"
+        )
+
+
 class TestResolveImage:
     async def test_no_env_returns_original(self, resolver, monkeypatch):
         monkeypatch.delenv(ROCK_REGISTRY_ENV, raising=False)
@@ -126,7 +164,7 @@ class TestResolveImage:
             new=AsyncMock(return_value=True),
         ) as probe:
             result = await resolver.resolve_image("swebench/foo:latest")
-        assert result == "reg.example.com/ns/foo:latest"
+        assert result == "reg.example.com/swebench/foo:latest"
         probe.assert_awaited_once()
 
     async def test_miss_returns_original(self, resolver, monkeypatch):
@@ -176,8 +214,8 @@ class TestResolveImage:
 
         with patch.object(RockRegistryResolver, "_http_probe_manifest", new=_probe):
             result = await resolver.resolve_image("swebench/foo:latest")
-        assert result == "reg-a.example.com/ns/foo:latest"
-        assert calls == ["reg-a.example.com/ns/foo:latest"]
+        assert result == "reg-a.example.com/swebench/foo:latest"
+        assert calls == ["reg-a.example.com/swebench/foo:latest"]
 
     async def test_multi_registry_falls_through_to_second(self, resolver, monkeypatch):
         monkeypatch.setenv(ROCK_REGISTRY_ENV, "reg-a.example.com/ns,reg-b.example.com/ns")
@@ -189,10 +227,11 @@ class TestResolveImage:
 
         with patch.object(RockRegistryResolver, "_http_probe_manifest", new=_probe):
             result = await resolver.resolve_image("swebench/foo:latest")
-        assert result == "reg-b.example.com/ns/foo:latest"
+        assert result == "reg-b.example.com/swebench/foo:latest"
         assert calls == [
+            "reg-a.example.com/swebench/foo:latest",
             "reg-a.example.com/ns/foo:latest",
-            "reg-b.example.com/ns/foo:latest",
+            "reg-b.example.com/swebench/foo:latest",
         ]
 
     async def test_multi_registry_all_miss_returns_original(self, resolver, monkeypatch):
@@ -204,7 +243,43 @@ class TestResolveImage:
         ) as probe:
             result = await resolver.resolve_image("swebench/foo:latest")
         assert result == "swebench/foo:latest"
-        assert probe.await_count == 2
+        assert probe.await_count == 4
+
+    async def test_original_namespace_probed_first(self, resolver, monkeypatch):
+        monkeypatch.setenv(ROCK_REGISTRY_ENV, "reg.example.com/fixed-ns")
+        calls: list[str] = []
+
+        async def _probe(self, candidate, *, timeout_sec):
+            calls.append(candidate)
+            return candidate == "reg.example.com/swebench/foo:latest"
+
+        with patch.object(RockRegistryResolver, "_http_probe_manifest", new=_probe):
+            result = await resolver.resolve_image("ghcr.io/swebench/foo:latest")
+        assert result == "reg.example.com/swebench/foo:latest"
+        assert calls == ["reg.example.com/swebench/foo:latest"]
+
+    async def test_falls_through_to_fixed_namespace(self, resolver, monkeypatch):
+        monkeypatch.setenv(ROCK_REGISTRY_ENV, "reg.example.com/fixed-ns")
+        calls: list[str] = []
+
+        async def _probe(self, candidate, *, timeout_sec):
+            calls.append(candidate)
+            return candidate == "reg.example.com/fixed-ns/foo:latest"
+
+        with patch.object(RockRegistryResolver, "_http_probe_manifest", new=_probe):
+            result = await resolver.resolve_image("ghcr.io/swebench/foo:latest")
+        assert result == "reg.example.com/fixed-ns/foo:latest"
+        assert calls == [
+            "reg.example.com/swebench/foo:latest",
+            "reg.example.com/fixed-ns/foo:latest",
+        ]
+
+    async def test_deduplicates_identical_candidates(self, resolver, monkeypatch):
+        monkeypatch.setenv(ROCK_REGISTRY_ENV, "reg.example.com/swebench")
+        probe = AsyncMock(return_value=False)
+        with patch.object(RockRegistryResolver, "_http_probe_manifest", new=probe):
+            await resolver.resolve_image("ghcr.io/swebench/foo:latest")
+        assert probe.await_count == 1
 
 
 class TestResolveDockerfile:
@@ -219,7 +294,7 @@ class TestResolveDockerfile:
         ):
             changed = await resolver.resolve_dockerfile(df)
         assert changed
-        assert "FROM reg.example.com/ns/swe-bench:v1\n" in df.read_text()
+        assert "FROM reg.example.com/repo/swe-bench:v1\n" in df.read_text()
 
     async def test_no_change_on_miss(self, tmp_path, resolver, monkeypatch):
         monkeypatch.setenv(ROCK_REGISTRY_ENV, "reg.example.com/ns")
@@ -255,7 +330,7 @@ class TestResolveDockerfile:
         ):
             changed = await resolver.resolve_dockerfile(df)
         assert changed
-        assert "FROM reg.example.com/ns/base:v1 AS builder\n" in df.read_text()
+        assert "FROM reg.example.com/repo/base:v1 AS builder\n" in df.read_text()
 
     async def test_handles_platform_flag(self, tmp_path, resolver, monkeypatch):
         monkeypatch.setenv(ROCK_REGISTRY_ENV, "reg.example.com/ns")
@@ -268,7 +343,7 @@ class TestResolveDockerfile:
         ):
             changed = await resolver.resolve_dockerfile(df)
         assert changed
-        assert "FROM --platform=linux/amd64 reg.example.com/ns/t-bench/deveval:latest\n" in df.read_text()
+        assert "FROM --platform=linux/amd64 reg.example.com/laude-institute/t-bench/deveval:latest\n" in df.read_text()
 
     async def test_skips_comment_lines(self, tmp_path, resolver, monkeypatch):
         monkeypatch.setenv(ROCK_REGISTRY_ENV, "reg.example.com/ns")

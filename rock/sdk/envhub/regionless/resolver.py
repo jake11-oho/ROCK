@@ -94,6 +94,25 @@ class RockRegistryResolver:
         return f"{registry.rstrip('/')}/{path}{suffix}"
 
     @staticmethod
+    def build_candidate_with_original_namespace(image: str, registry: str) -> str:
+        """Build candidate preserving the original namespace from the image.
+
+        Replaces only the registry host, keeping the original namespace and
+        image name intact.
+        Example: ``ghcr.io/swebench/foo:v1`` with registry
+        ``reg.aliyuncs.com/fixed-ns`` → ``reg.aliyuncs.com/swebench/foo:v1``.
+        """
+        path, suffix = RockRegistryResolver.split_tag_or_digest(image)
+        # Strip the original registry host from the image path
+        if "/" in path:
+            first_part, rest = path.split("/", 1)
+            if "." in first_part or ":" in first_part:
+                path = rest
+        # Extract only the host from the mirror registry (before first /)
+        mirror_host = registry.split("/", 1)[0] if "/" in registry else registry
+        return f"{mirror_host}/{path}{suffix}"
+
+    @staticmethod
     def _parse_bearer_challenge(header: str) -> dict[str, str]:
         """Parse ``realm``, ``service``, ``scope`` from a Bearer WWW-Authenticate header."""
         return {m.group(1): m.group(2) for m in re.finditer(r'(\w+)="([^"]*)"', header)}
@@ -184,12 +203,22 @@ class RockRegistryResolver:
 
         resolved = image
         for registry in registries:
-            candidate = self.build_candidate(image, registry)
-            if candidate == image:
-                continue
-            if await self._http_probe_manifest(candidate, timeout_sec=timeout_sec):
-                logger.info("Rewriting image %s -> %s (ROCK mirror)", image, candidate)
-                resolved = candidate
+            candidates = []
+            original_ns = self.build_candidate_with_original_namespace(image, registry)
+            fixed_ns = self.build_candidate(image, registry)
+            if original_ns != image:
+                candidates.append(original_ns)
+            if fixed_ns != image and fixed_ns not in candidates:
+                candidates.append(fixed_ns)
+
+            found = False
+            for candidate in candidates:
+                if await self._http_probe_manifest(candidate, timeout_sec=timeout_sec):
+                    logger.info("Rewriting image %s -> %s (ROCK mirror)", image, candidate)
+                    resolved = candidate
+                    found = True
+                    break
+            if found:
                 break
 
         async with self._cache_lock:
