@@ -568,7 +568,7 @@ class AuditEventInfo:
 
 ## Database Schema
 
-### Tables
+### Tables Overview
 
 | Table | Primary Key | Unique Constraints |
 |-------|------------|-------------------|
@@ -578,23 +578,164 @@ class AuditEventInfo:
 | `dataset_permissions` | `id` (auto) | `(dataset_id, user_id)` |
 | `audit_events` | `id` (auto) | — |
 
-### Indexes
+### Table: `datasets`
 
-- `datasets.org` — 按组织查询
-- `instances.(dataset_id, split)` — 复合索引
-- `instances.format` — 按格式过滤
-- `instances.language` — 按语言过滤
-- `images.status` — 按状态过滤
-- `dataset_permissions.user_id` — 按用户查询权限
-- `audit_events.target_type` — 审计查询
-- `audit_events.event_type` — 审计查询
-- `audit_events.(target_type, target_id)` — 复合索引
+数据集元数据主表。
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `id` | `Integer` | No | autoincrement | 主键 |
+| `org` | `String(255)` | No | — | 组织名（索引） |
+| `name` | `String(255)` | No | — | 数据集名称 |
+| `description` | `Text` | Yes | `""` | 描述 |
+| `tags` | `JSON` | Yes | `[]` | 标签列表 |
+| `owner` | `String(255)` | Yes | `""` | 所有者 |
+| `homepage` | `String(512)` | Yes | `NULL` | 主页 URL |
+| `repo` | `String(512)` | Yes | `NULL` | 仓库 URL |
+| `paper` | `String(512)` | Yes | `NULL` | 论文 URL |
+| `leaderboard` | `String(512)` | Yes | `NULL` | 排行榜 URL |
+| `logo_url` | `String(512)` | Yes | `NULL` | Logo URL |
+| `os` | `String(64)` | Yes | `NULL` | 目标操作系统 |
+| `version` | `String(64)` | Yes | `NULL` | 版本号 |
+| `task_counts` | `JSON` | Yes | `{}` | 各 split 的 task 数量 `{split: count}` |
+| `created_at` | `DateTime` | Yes | `now()` | 创建时间 |
+| `updated_at` | `DateTime` | Yes | `now()` | 更新时间（自动维护） |
+
+**Unique:** `(org, name)`
+**Relationships:** `instances` (1:N, cascade delete), `permissions` (1:N, cascade delete)
+
+### Table: `instances`
+
+数据集实例表，每条记录对应一个 task/instance。
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `id` | `Integer` | No | autoincrement | 主键 |
+| `dataset_id` | `Integer` | No | — | 外键 → `datasets.id`（ON DELETE CASCADE） |
+| `split` | `String(255)` | No | — | 数据划分 (train/test/dev) |
+| `name` | `String(255)` | No | — | 实例唯一标识 |
+| `description` | `Text` | Yes | `""` | 描述 |
+| `type` | `String(16)` | Yes | `"directory"` | 类型 (file/directory) |
+| `size` | `BigInteger` | Yes | `NULL` | 文件大小 (bytes) |
+| `file_count` | `Integer` | Yes | `NULL` | 文件数量 |
+| `etag` | `String(255)` | Yes | `NULL` | ETag |
+| `format` | `String(64)` | Yes | `NULL` | 数据格式（索引） |
+| `repo` | `String(512)` | Yes | `NULL` | 源代码仓库 |
+| `language` | `String(64)` | Yes | `NULL` | 编程语言（索引） |
+| `difficulty` | `String(64)` | Yes | `NULL` | 难度 (easy/medium/hard) |
+| `base_commit` | `String(64)` | Yes | `NULL` | 基准 commit SHA |
+| `image_uris` | `JSON` | Yes | `NULL` | 关联镜像 URI 列表 |
+| `raw` | `Text` | Yes | `NULL` | 原始数据 (JSON string) |
+| `source_revision` | `String(128)` | Yes | `NULL` | 导入时的源版本 |
+| `imported_from` | `String(512)` | Yes | `NULL` | 导入来源标识 |
+| `created_by` | `String(255)` | Yes | `NULL` | 创建者 |
+| `created_at` | `DateTime` | Yes | `now()` | 创建时间 |
+| `updated_at` | `DateTime` | Yes | `now()` | 更新时间（自动维护） |
+
+**Unique:** `(dataset_id, split, name)`
+**Indexes:** `(dataset_id, split)` 复合索引, `format`, `language`
+
+### Table: `images`
+
+镜像注册表，跟踪镜像在不同区域的同步状态。
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `source_image_uri` | `String(512)` | No | — | 主键，源镜像 URI |
+| `image_uri_sg` | `String(512)` | Yes | `NULL` | 新加坡区域镜像 URI |
+| `image_uri_sh` | `String(512)` | Yes | `NULL` | 上海区域镜像 URI |
+| `image_hash` | `String(71)` | Yes | `NULL` | 镜像摘要 (sha256:...) |
+| `status` | `String(32)` | No | `"pending"` | 同步状态（索引）：pending/syncing/ready/failed |
+| `last_error` | `Text` | Yes | `NULL` | 最近一次错误信息 |
+| `last_job_id` | `String(64)` | Yes | `NULL` | 最近一次同步 job ID |
+| `created_by` | `String(255)` | No | `"system"` | 创建者 |
+| `created_at` | `DateTime` | Yes | `now()` | 创建时间 |
+| `updated_at` | `DateTime` | Yes | `now()` | 更新时间（自动维护） |
+
+**Indexes:** `status`
+
+### Table: `dataset_permissions`
+
+数据集权限控制表。
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `id` | `Integer` | No | autoincrement | 主键 |
+| `dataset_id` | `Integer` | No | — | 外键 → `datasets.id`（ON DELETE CASCADE） |
+| `user_id` | `String(255)` | No | — | 用户标识 |
+| `role` | `String(32)` | No | `"viewer"` | 角色：viewer/editor/admin |
+| `granted_by` | `String(255)` | Yes | `NULL` | 授权人 |
+| `created_at` | `DateTime` | Yes | `now()` | 创建时间 |
+| `updated_at` | `DateTime` | Yes | `now()` | 更新时间（自动维护） |
+
+**Unique:** `(dataset_id, user_id)`
+**Indexes:** `user_id`
+
+### Table: `audit_events`
+
+审计日志表，记录所有元数据变更操作。
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `id` | `Integer` | No | autoincrement | 主键 |
+| `target_type` | `String(32)` | No | — | 目标类型（索引）：dataset/instance/image/permission |
+| `target_id` | `String(512)` | No | — | 目标标识 (如 `org/name`) |
+| `event_type` | `String(64)` | No | — | 事件类型（索引）：create/update/delete/... |
+| `operator` | `String(255)` | No | — | 操作人 |
+| `changes` | `JSON` | Yes | `NULL` | 变更详情 `{field: {old, new}}` |
+| `created_at` | `DateTime` | Yes | `now()` | 事件时间 |
+
+**Indexes:** `target_type`, `event_type`, `(target_type, target_id)` 复合索引
 
 ### Relationships
 
 ```
-Dataset 1──N Instance       (cascade delete)
-Dataset 1──N DatasetPermission (cascade delete)
+Dataset 1──N Instance            (cascade delete)
+Dataset 1──N DatasetPermission   (cascade delete)
+```
+
+### ER Diagram
+
+```
+┌─────────────────┐       ┌──────────────────────┐
+│    datasets      │       │      instances        │
+├─────────────────┤       ├──────────────────────┤
+│ id (PK)         │──┐    │ id (PK)              │
+│ org             │  │    │ dataset_id (FK)  ←───┘
+│ name            │  │    │ split                 │
+│ description     │  │    │ name                  │
+│ tags            │  │    │ type, size, format... │
+│ owner           │  │    │ language, difficulty  │
+│ homepage, repo  │  │    │ image_uris, raw       │
+│ task_counts     │  │    │ created_at/updated_at │
+│ created_at      │  │    └──────────────────────┘
+│ updated_at      │  │
+└─────────────────┘  │    ┌──────────────────────┐
+                     │    │ dataset_permissions   │
+                     │    ├──────────────────────┤
+                     └───>│ id (PK)              │
+                          │ dataset_id (FK)      │
+                          │ user_id              │
+                          │ role                 │
+                          │ granted_by           │
+                          │ created_at/updated_at│
+                          └──────────────────────┘
+
+┌──────────────────┐      ┌──────────────────────┐
+│     images       │      │    audit_events       │
+├──────────────────┤      ├──────────────────────┤
+│ source_image_uri │      │ id (PK)              │
+│   (PK)           │      │ target_type          │
+│ image_uri_sg     │      │ target_id            │
+│ image_uri_sh     │      │ event_type           │
+│ image_hash       │      │ operator             │
+│ status           │      │ changes              │
+│ last_error       │      │ created_at           │
+│ last_job_id      │      └──────────────────────┘
+│ created_by       │
+│ created_at       │
+│ updated_at       │
+└──────────────────┘
 ```
 
 ---
