@@ -120,19 +120,23 @@ result = client.list_datasets(
 | `sort_by` | `sort_order` | 行为 |
 |-----------|-------------|------|
 | `None` | `None` | 默认 `updated_at DESC` |
-| `SortField.NAME` | `None` | `name ASC` |
+| `SortField.NAME` | `None` | `name ASC`（大小写不敏感） |
 | `SortField.CREATED_AT` | `SortOrder.DESC` | `created_at DESC` |
 | `SortField.UPDATED_AT` | `SortOrder.ASC` | `updated_at ASC` |
+
+> **Note:** `SortField.NAME` 排序为大小写不敏感（`lower(name)`），确保 `Apple` 和 `apple` 相邻排列。
 
 ---
 
 #### `get_dataset`
 
-获取单个 dataset 信息。
+获取单个 dataset 信息。`splits` 字段包含完整的 `SplitInfo` 列表（含 task_count 和时间戳）。
 
 ```python
 info = client.get_dataset("princeton-nlp", "SWE-bench_Verified")
 # Returns: DatasetInfo | None
+# info.splits -> [SplitInfo(name="test", task_count=500, ...), ...]
+# info.task_counts -> {"test": 500}  (computed property)
 ```
 
 ---
@@ -550,10 +554,14 @@ class DatasetInfo:
     logo_url: str | None = None
     os: str | None = None
     version: str | None = None
-    splits: list[str] = []           # 可用 splits（从 splits 表聚合）
-    task_counts: dict[str, int] = {} # {split: count}（从 splits 表聚合）
+    splits: list[SplitInfo] = []     # Split 详情列表（含 task_count、时间戳等）
     created_at: str | None = None    # 创建时间 (ISO 8601)
     updated_at: str | None = None    # 更新时间 (ISO 8601)
+
+    @property
+    def task_counts(self) -> dict[str, int]:
+        """从 splits 计算得出 {split_name: count}，向后兼容。"""
+        return {s.name: s.task_count for s in self.splits if s.task_count}
 ```
 
 ### `TaskEntry`
@@ -585,7 +593,7 @@ class TaskEntry:
 
 ### `SplitInfo`
 
-Split 详细信息，由 `list_dataset_split_info` 返回。
+Split 详细信息。内嵌在 `DatasetInfo.splits` 中返回，也由 `list_dataset_split_info` 独立返回。
 
 ```python
 @dataclass
@@ -870,10 +878,12 @@ instances = [
 ]
 client.register_instances_batch("princeton-nlp", "SWE-bench_Verified", "test", instances)
 
-# Browse — dataset info includes splits and task_counts from splits table
+# Browse — dataset info includes SplitInfo objects with full metadata
 info = client.get_dataset("princeton-nlp", "SWE-bench_Verified")
-print(f"Splits: {info.splits}, Counts: {info.task_counts}")
-print(f"Created: {info.created_at}, Updated: {info.updated_at}")
+for s in info.splits:
+    print(f"Split: {s.name}, Tasks: {s.task_count}, Created: {s.created_at}")
+# Backward-compatible property: info.task_counts -> {"test": 500}
+print(f"Counts: {info.task_counts}")
 
 # List datasets sorted by update time (default)
 result = client.list_datasets(org="princeton-nlp")
