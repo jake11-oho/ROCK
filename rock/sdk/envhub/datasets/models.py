@@ -46,10 +46,13 @@ class DatasetInfo:
     logo_url: str | None = None
     os: str | None = None
     version: str | None = None
-    splits: list[str] = field(default_factory=list)
-    task_counts: dict[str, int] = field(default_factory=dict)
+    splits: list["SplitInfo"] = field(default_factory=list)
     created_at: str | None = None
     updated_at: str | None = None
+
+    @property
+    def task_counts(self) -> dict[str, int]:
+        return {s.name: s.task_count for s in self.splits if s.task_count}
 
 
 @dataclass

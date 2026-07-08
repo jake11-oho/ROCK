@@ -119,7 +119,7 @@ class DbDatasetRegistry:
         if sort_by is None:
             return None
         field_map = {
-            SortField.NAME: model.name,
+            SortField.NAME: func.lower(model.name),
             SortField.CREATED_AT: model.created_at,
             SortField.UPDATED_AT: model.updated_at,
         }
@@ -338,8 +338,16 @@ class DbDatasetRegistry:
 
     def _build_dataset_info(self, session: Session, ds: Dataset) -> DatasetInfo:
         split_rows = session.query(Split).filter(Split.dataset_id == ds.id).order_by(Split.name).all()
-        splits = [sp.name for sp in split_rows]
-        task_counts = {sp.name: sp.task_count for sp in split_rows if sp.task_count}
+        splits = [
+            SplitInfo(
+                name=sp.name,
+                task_count=sp.task_count or 0,
+                created_by=sp.created_by,
+                created_at=sp.created_at.isoformat() if sp.created_at else None,
+                updated_at=sp.updated_at.isoformat() if sp.updated_at else None,
+            )
+            for sp in split_rows
+        ]
         return DatasetInfo(
             id=ds.full_name,
             description=ds.description or "",
@@ -353,7 +361,6 @@ class DbDatasetRegistry:
             os=ds.os,
             version=ds.version,
             splits=splits,
-            task_counts=task_counts,
             created_at=ds.created_at.isoformat() if ds.created_at else None,
             updated_at=ds.updated_at.isoformat() if ds.updated_at else None,
         )

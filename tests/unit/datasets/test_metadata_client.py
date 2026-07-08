@@ -489,7 +489,7 @@ class TestSplitTable:
         client.register_instance("org1", "bench", "train", "t3")
 
         info = client.get_dataset("org1", "bench")
-        assert sorted(info.splits) == ["test", "train"]
+        assert sorted(s.name for s in info.splits) == ["test", "train"]
         assert info.task_counts == {"test": 2, "train": 1}
 
     def test_list_dataset_split_info_empty(self, client):
