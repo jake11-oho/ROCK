@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Generic, TypeVar
 
 T = TypeVar("T")
+
+
+class SortOrder(str, Enum):
+    ASC = "asc"
+    DESC = "desc"
+
+
+class SortField(str, Enum):
+    NAME = "name"
+    CREATED_AT = "created_at"
+    UPDATED_AT = "updated_at"
 
 
 @dataclass
@@ -36,6 +48,8 @@ class DatasetInfo:
     version: str | None = None
     splits: list[str] = field(default_factory=list)
     task_counts: dict[str, int] = field(default_factory=dict)
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 @dataclass
@@ -81,7 +95,18 @@ class TaskEntry:
     raw: str | None = None
     source_revision: str | None = None
     imported_from: str | None = None
+    tags: list[str] | None = None
     created_by: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass
+class SplitInfo:
+    name: str
+    task_count: int = 0
+    created_by: str | None = None
+    created_at: str | None = None
     updated_at: str | None = None
 
 

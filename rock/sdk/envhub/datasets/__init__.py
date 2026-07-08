@@ -7,6 +7,9 @@ from rock.sdk.envhub.datasets.models import (
     ImageInfo,
     PageResult,
     PermissionInfo,
+    SortField,
+    SortOrder,
+    SplitInfo,
     TaskEntry,
     UploadResult,
 )
@@ -20,6 +23,9 @@ __all__ = [
     "ImageInfo",
     "PageResult",
     "PermissionInfo",
+    "SortField",
+    "SortOrder",
+    "SplitInfo",
     "TaskEntry",
     "UploadResult",
 ]

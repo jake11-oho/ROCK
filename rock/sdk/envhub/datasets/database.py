@@ -36,12 +36,12 @@ class Dataset(Base):
     logo_url = Column(String(512), nullable=True)
     os = Column(String(64), nullable=True)
     version = Column(String(64), nullable=True)
-    task_counts = Column(JSON, nullable=True, default=dict)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     instances = relationship("Instance", back_populates="dataset", cascade="all, delete-orphan")
     permissions = relationship("DatasetPermission", back_populates="dataset", cascade="all, delete-orphan")
+    splits_rel = relationship("Split", back_populates="dataset", cascade="all, delete-orphan")
 
     __table_args__ = (UniqueConstraint("org", "name", name="uq_dataset_org_name"),)
 
@@ -71,6 +71,7 @@ class Instance(Base):
     difficulty = Column(String(64), nullable=True)
     base_commit = Column(String(64), nullable=True)
     image_uris = Column(JSON, nullable=True)
+    tags = Column(JSON, default=list)
     raw = Column(Text, nullable=True)
     source_revision = Column(String(128), nullable=True)
     imported_from = Column(String(512), nullable=True)
@@ -87,6 +88,28 @@ class Instance(Base):
 
     def __repr__(self):
         return f"<Instance(id={self.id}, name='{self.name}', split='{self.split}')>"
+
+
+class Split(Base):
+    __tablename__ = "splits"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    task_count = Column(Integer, nullable=False, default=0)
+    created_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    dataset = relationship("Dataset", back_populates="splits_rel")
+
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "name", name="uq_split_dataset_name"),
+        Index("ix_split_dataset_name", "dataset_id", "name"),
+    )
+
+    def __repr__(self):
+        return f"<Split(id={self.id}, dataset_id={self.dataset_id}, name='{self.name}', task_count={self.task_count})>"
 
 
 class Image(Base):

@@ -5,17 +5,20 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import Engine, create_engine, func, text
+from sqlalchemy import Engine, create_engine, func
 from sqlalchemy.orm import Session
 
-from rock.sdk.envhub.datasets.database import AuditEvent, Base, Dataset, DatasetPermission, Image, Instance
 from rock.logger import init_logger
+from rock.sdk.envhub.datasets.database import AuditEvent, Base, Dataset, DatasetPermission, Image, Instance, Split
 from rock.sdk.envhub.datasets.models import (
     AuditEventInfo,
     DatasetInfo,
     ImageInfo,
     PageResult,
     PermissionInfo,
+    SortField,
+    SortOrder,
+    SplitInfo,
     TaskEntry,
 )
 
@@ -54,8 +57,7 @@ def _get_shared_engine(
             created_with = _engine_params.get(db_url)
             if created_with and created_with != requested:
                 logger.warning(
-                    "Reusing engine for %s with pool params from first caller %s; "
-                    "requested params %s are ignored",
+                    "Reusing engine for %s with pool params from first caller %s; requested params %s are ignored",
                     db_url.split("@")[-1] if "@" in db_url else db_url,
                     created_with,
                     requested,
@@ -112,6 +114,21 @@ class DbDatasetRegistry:
 
     # ── helpers ──
 
+    @staticmethod
+    def _resolve_sort_column(model, sort_by: SortField | None, sort_order: SortOrder | None):
+        if sort_by is None:
+            return None
+        field_map = {
+            SortField.NAME: model.name,
+            SortField.CREATED_AT: model.created_at,
+            SortField.UPDATED_AT: model.updated_at,
+        }
+        col = field_map.get(sort_by)
+        if col is None:
+            return None
+        order = sort_order or SortOrder.ASC
+        return col.asc() if order == SortOrder.ASC else col.desc()
+
     def _get_dataset(self, session: Session, org: str, name: str) -> Dataset | None:
         return session.query(Dataset).filter(Dataset.org == org, Dataset.name == name).first()
 
@@ -130,53 +147,23 @@ class DbDatasetRegistry:
             return None
         return self._get_instance(session, ds.id, split, instance_name)
 
+    def _get_or_create_split(self, session: Session, dataset_id: int, split: str) -> Split:
+        sp = session.query(Split).filter(Split.dataset_id == dataset_id, Split.name == split).first()
+        if sp is None:
+            sp = Split(dataset_id=dataset_id, name=split, task_count=0)
+            session.add(sp)
+            session.flush()
+        return sp
+
     def _increment_task_count(self, session: Session, dataset_id: int, split: str, delta: int = 1) -> None:
-        if self._engine.dialect.name == "sqlite":
-            self._update_task_count_python(session, dataset_id, split, delta)
-        else:
-            session.execute(
-                text("""
-                    UPDATE datasets SET task_counts = jsonb_set(
-                        COALESCE(task_counts, '{}')::jsonb,
-                        ARRAY[:split],
-                        to_jsonb(COALESCE((task_counts->>:split)::int, 0) + :delta)
-                    ) WHERE id = :dataset_id
-                """),
-                {"split": split, "delta": delta, "dataset_id": dataset_id},
-            )
+        sp = self._get_or_create_split(session, dataset_id, split)
+        sp.task_count = (sp.task_count or 0) + delta
 
     def _decrement_task_count(self, session: Session, dataset_id: int, split: str, delta: int = 1) -> None:
-        if self._engine.dialect.name == "sqlite":
-            self._update_task_count_python(session, dataset_id, split, -delta)
-        else:
-            session.execute(
-                text("""
-                    UPDATE datasets SET task_counts =
-                        CASE
-                            WHEN COALESCE((task_counts->>:split)::int, 0) - :delta <= 0
-                            THEN (COALESCE(task_counts, '{}')::jsonb - :split)
-                            ELSE jsonb_set(
-                                COALESCE(task_counts, '{}')::jsonb,
-                                ARRAY[:split],
-                                to_jsonb((task_counts->>:split)::int - :delta)
-                            )
-                        END
-                    WHERE id = :dataset_id
-                """),
-                {"split": split, "delta": delta, "dataset_id": dataset_id},
-            )
-
-    def _update_task_count_python(self, session: Session, dataset_id: int, split: str, delta: int) -> None:
-        ds = session.query(Dataset).filter(Dataset.id == dataset_id).first()
-        if ds is None:
+        sp = session.query(Split).filter(Split.dataset_id == dataset_id, Split.name == split).first()
+        if sp is None:
             return
-        counts = dict(ds.task_counts or {})
-        new_val = counts.get(split, 0) + delta
-        if new_val <= 0:
-            counts.pop(split, None)
-        else:
-            counts[split] = new_val
-        ds.task_counts = counts
+        sp.task_count = max((sp.task_count or 0) - delta, 0)
 
     # ── Registration ──
 
@@ -236,6 +223,7 @@ class DbDatasetRegistry:
         difficulty: str | None = None,
         base_commit: str | None = None,
         image_uris: list[str] | None = None,
+        tags: list[str] | None = None,
         raw: str | None = None,
         source_revision: str | None = None,
         imported_from: str | None = None,
@@ -258,11 +246,13 @@ class DbDatasetRegistry:
                 difficulty=difficulty,
                 base_commit=base_commit,
                 image_uris=image_uris,
+                tags=tags or [],
                 raw=raw,
                 source_revision=source_revision,
                 imported_from=imported_from,
                 created_by=created_by,
             )
+            self._get_or_create_split(session, ds.id, split)
             is_new = inst is None
             if inst is not None:
                 for key, value in kwargs.items():
@@ -289,6 +279,7 @@ class DbDatasetRegistry:
         "difficulty",
         "base_commit",
         "image_uris",
+        "tags",
         "raw",
         "source_revision",
         "imported_from",
@@ -302,6 +293,8 @@ class DbDatasetRegistry:
                 ds = Dataset(org=org, name=dataset)
                 session.add(ds)
                 session.flush()
+
+            self._get_or_create_split(session, ds.id, split)
 
             names = [item["name"] for item in instances]
             existing_map: dict[str, Instance] = {}
@@ -343,11 +336,35 @@ class DbDatasetRegistry:
 
     # ── Listing ──
 
+    def _build_dataset_info(self, session: Session, ds: Dataset) -> DatasetInfo:
+        split_rows = session.query(Split).filter(Split.dataset_id == ds.id).order_by(Split.name).all()
+        splits = [sp.name for sp in split_rows]
+        task_counts = {sp.name: sp.task_count for sp in split_rows if sp.task_count}
+        return DatasetInfo(
+            id=ds.full_name,
+            description=ds.description or "",
+            tags=ds.tags or [],
+            owner=ds.owner or "",
+            homepage=ds.homepage,
+            repo=ds.repo,
+            paper=ds.paper,
+            leaderboard=ds.leaderboard,
+            logo_url=ds.logo_url,
+            os=ds.os,
+            version=ds.version,
+            splits=splits,
+            task_counts=task_counts,
+            created_at=ds.created_at.isoformat() if ds.created_at else None,
+            updated_at=ds.updated_at.isoformat() if ds.updated_at else None,
+        )
+
     def list_datasets(
         self,
         org: str | None = None,
         *,
         query: str | None = None,
+        sort_by: SortField | None = None,
+        sort_order: SortOrder | None = None,
         offset: int = 0,
         limit: int | None = None,
     ) -> PageResult[DatasetInfo]:
@@ -358,34 +375,19 @@ class DbDatasetRegistry:
             if query:
                 pattern = f"%{query}%"
                 q = q.filter((Dataset.org.ilike(pattern)) | (Dataset.name.ilike(pattern)))
-            q = q.order_by(Dataset.org, Dataset.name)
+
+            order_clause = self._resolve_sort_column(Dataset, sort_by, sort_order)
+            if order_clause is not None:
+                q = q.order_by(order_clause)
+            else:
+                q = q.order_by(Dataset.updated_at.desc())
 
             total = q.count()
             q = q.offset(offset)
             if limit is not None:
                 q = q.limit(limit)
 
-            items: list[DatasetInfo] = []
-            for ds in q.all():
-                tc = ds.task_counts or {}
-                items.append(
-                    DatasetInfo(
-                        id=ds.full_name,
-                        description=ds.description or "",
-                        tags=ds.tags or [],
-                        owner=ds.owner or "",
-                        homepage=ds.homepage,
-                        repo=ds.repo,
-                        paper=ds.paper,
-                        leaderboard=ds.leaderboard,
-                        logo_url=ds.logo_url,
-                        os=ds.os,
-                        version=ds.version,
-                        splits=list(tc.keys()),
-                        task_counts=tc,
-                    )
-                )
-
+            items = [self._build_dataset_info(session, ds) for ds in q.all()]
             return PageResult(items=items, total=total, offset=offset, limit=limit)
 
     def list_organizations(self, *, offset: int = 0, limit: int | None = None) -> PageResult[str]:
@@ -413,14 +415,48 @@ class DbDatasetRegistry:
             ds = self._get_dataset(session, org, dataset)
             if ds is None:
                 return []
-            rows = (
-                session.query(Instance.split)
-                .filter(Instance.dataset_id == ds.id)
-                .distinct()
-                .order_by(Instance.split)
-                .all()
-            )
+            rows = session.query(Split.name).filter(Split.dataset_id == ds.id).order_by(Split.name).all()
             return [row[0] for row in rows]
+
+    def list_dataset_split_info(
+        self,
+        org: str,
+        dataset: str,
+        *,
+        sort_by: SortField | None = None,
+        sort_order: SortOrder | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> PageResult[SplitInfo]:
+        with self._session() as session:
+            ds = self._get_dataset(session, org, dataset)
+            if ds is None:
+                return PageResult(items=[], total=0, offset=offset, limit=limit)
+
+            q = session.query(Split).filter(Split.dataset_id == ds.id)
+
+            order_clause = self._resolve_sort_column(Split, sort_by, sort_order)
+            if order_clause is not None:
+                q = q.order_by(order_clause)
+            else:
+                q = q.order_by(Split.name.asc())
+
+            total = q.count()
+            q = q.offset(offset)
+            if limit is not None:
+                q = q.limit(limit)
+
+            items = [
+                SplitInfo(
+                    name=sp.name,
+                    task_count=sp.task_count or 0,
+                    created_by=sp.created_by,
+                    created_at=sp.created_at.isoformat() if sp.created_at else None,
+                    updated_at=sp.updated_at.isoformat() if sp.updated_at else None,
+                )
+                for sp in q.all()
+            ]
+            return PageResult(items=items, total=total, offset=offset, limit=limit)
 
     def list_dataset_tasks(
         self,
@@ -429,6 +465,8 @@ class DbDatasetRegistry:
         split: str,
         *,
         query: str | None = None,
+        sort_by: SortField | None = None,
+        sort_order: SortOrder | None = None,
         offset: int = 0,
         limit: int | None = None,
     ) -> PageResult[str]:
@@ -440,7 +478,12 @@ class DbDatasetRegistry:
             q = session.query(Instance.name).filter(Instance.dataset_id == ds.id, Instance.split == split)
             if query:
                 q = q.filter(Instance.name.ilike(f"%{query}%"))
-            q = q.order_by(Instance.name)
+
+            order_clause = self._resolve_sort_column(Instance, sort_by, sort_order)
+            if order_clause is not None:
+                q = q.order_by(order_clause)
+            else:
+                q = q.order_by(Instance.name.asc())
 
             total = q.count()
             q = q.offset(offset)
@@ -457,6 +500,8 @@ class DbDatasetRegistry:
         split: str,
         *,
         query: str | None = None,
+        sort_by: SortField | None = None,
+        sort_order: SortOrder | None = None,
         offset: int = 0,
         limit: int | None = None,
     ) -> PageResult[TaskEntry]:
@@ -468,7 +513,12 @@ class DbDatasetRegistry:
             q = session.query(Instance).filter(Instance.dataset_id == ds.id, Instance.split == split)
             if query:
                 q = q.filter(Instance.name.ilike(f"%{query}%"))
-            q = q.order_by(Instance.name)
+
+            order_clause = self._resolve_sort_column(Instance, sort_by, sort_order)
+            if order_clause is not None:
+                q = q.order_by(order_clause)
+            else:
+                q = q.order_by(Instance.name.asc())
 
             total = q.count()
             q = q.offset(offset)
@@ -490,10 +540,12 @@ class DbDatasetRegistry:
                     difficulty=inst.difficulty,
                     base_commit=inst.base_commit,
                     image_uris=inst.image_uris,
+                    tags=inst.tags or [],
                     raw=inst.raw,
                     source_revision=inst.source_revision,
                     imported_from=inst.imported_from,
                     created_by=inst.created_by,
+                    created_at=inst.created_at.isoformat() if inst.created_at else None,
                     updated_at=inst.updated_at.isoformat() if inst.updated_at else None,
                 )
                 for inst in q.all()
@@ -507,22 +559,7 @@ class DbDatasetRegistry:
             ds = self._get_dataset(session, org, dataset)
             if ds is None:
                 return None
-            tc = ds.task_counts or {}
-            return DatasetInfo(
-                id=ds.full_name,
-                description=ds.description or "",
-                tags=ds.tags or [],
-                owner=ds.owner or "",
-                homepage=ds.homepage,
-                repo=ds.repo,
-                paper=ds.paper,
-                leaderboard=ds.leaderboard,
-                logo_url=ds.logo_url,
-                os=ds.os,
-                version=ds.version,
-                splits=list(tc.keys()),
-                task_counts=tc,
-            )
+            return self._build_dataset_info(session, ds)
 
     def get_instance(self, org: str, dataset: str, split: str, instance_name: str) -> Instance | None:
         with self._session() as session:
@@ -568,7 +605,9 @@ class DbDatasetRegistry:
                 .all()
             )
             counts = {split_name: cnt for split_name, cnt in rows}
-            ds.task_counts = counts
+            for split_name, cnt in counts.items():
+                sp = self._get_or_create_split(session, ds.id, split_name)
+                sp.task_count = cnt
             return counts
 
     # ── Image CRUD ──

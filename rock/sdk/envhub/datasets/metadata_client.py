@@ -8,12 +8,14 @@ from rock.sdk.envhub.datasets.models import (
     ImageInfo,
     PageResult,
     PermissionInfo,
+    SortField,
+    SortOrder,
+    SplitInfo,
     TaskEntry,
 )
 
 if TYPE_CHECKING:
     from rock.sdk.envhub.datasets.database import Dataset, DatasetPermission, Image, Instance
-    from rock.sdk.envhub.datasets.registry.db import DbDatasetRegistry
 
 
 class DatasetMetadataClient:
@@ -82,10 +84,14 @@ class DatasetMetadataClient:
         org: str | None = None,
         *,
         query: str | None = None,
+        sort_by: SortField | None = None,
+        sort_order: SortOrder | None = None,
         offset: int = 0,
         limit: int | None = None,
     ) -> PageResult[DatasetInfo]:
-        return self._db.list_datasets(org, query=query, offset=offset, limit=limit)
+        return self._db.list_datasets(
+            org, query=query, sort_by=sort_by, sort_order=sort_order, offset=offset, limit=limit
+        )
 
     def get_dataset(self, org: str, dataset: str) -> DatasetInfo | None:
         return self._db.get_dataset(org, dataset)
@@ -110,6 +116,7 @@ class DatasetMetadataClient:
         difficulty: str | None = None,
         base_commit: str | None = None,
         image_uris: list[str] | None = None,
+        tags: list[str] | None = None,
         raw: str | None = None,
         source_revision: str | None = None,
         imported_from: str | None = None,
@@ -128,6 +135,7 @@ class DatasetMetadataClient:
             difficulty=difficulty,
             base_commit=base_commit,
             image_uris=image_uris,
+            tags=tags,
             raw=raw,
             source_revision=source_revision,
             imported_from=imported_from,
@@ -157,6 +165,20 @@ class DatasetMetadataClient:
     def list_dataset_splits(self, org: str, dataset: str) -> list[str]:
         return self._db.list_dataset_splits(org, dataset)
 
+    def list_dataset_split_info(
+        self,
+        org: str,
+        dataset: str,
+        *,
+        sort_by: SortField | None = None,
+        sort_order: SortOrder | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> PageResult[SplitInfo]:
+        return self._db.list_dataset_split_info(
+            org, dataset, sort_by=sort_by, sort_order=sort_order, offset=offset, limit=limit
+        )
+
     def list_dataset_tasks(
         self,
         org: str,
@@ -164,10 +186,14 @@ class DatasetMetadataClient:
         split: str,
         *,
         query: str | None = None,
+        sort_by: SortField | None = None,
+        sort_order: SortOrder | None = None,
         offset: int = 0,
         limit: int | None = None,
     ) -> PageResult[str]:
-        return self._db.list_dataset_tasks(org, dataset, split, query=query, offset=offset, limit=limit)
+        return self._db.list_dataset_tasks(
+            org, dataset, split, query=query, sort_by=sort_by, sort_order=sort_order, offset=offset, limit=limit
+        )
 
     def list_dataset_task_entries(
         self,
@@ -176,10 +202,14 @@ class DatasetMetadataClient:
         split: str,
         *,
         query: str | None = None,
+        sort_by: SortField | None = None,
+        sort_order: SortOrder | None = None,
         offset: int = 0,
         limit: int | None = None,
     ) -> PageResult[TaskEntry]:
-        return self._db.list_dataset_task_entries(org, dataset, split, query=query, offset=offset, limit=limit)
+        return self._db.list_dataset_task_entries(
+            org, dataset, split, query=query, sort_by=sort_by, sort_order=sort_order, offset=offset, limit=limit
+        )
 
     # ── Image ──
 

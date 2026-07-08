@@ -13,7 +13,7 @@
 ```
 rock/sdk/envhub/datasets/
 ├── __init__.py              # 导出 DatasetMetadataClient + 数据模型
-├── database.py              # SDK 独立 ORM 模型 (Dataset, Instance, Image, Permission, AuditEvent)，自有 Base
+├── database.py              # SDK 独立 ORM 模型 (Dataset, Instance, Split, Image, Permission, AuditEvent)，自有 Base
 ├── metadata_client.py       # 用户侧 SDK 入口
 ├── models.py                # 数据传输对象 (dataclass)
 └── registry/
@@ -95,12 +95,16 @@ ds = client.register_dataset(
 
 #### `list_datasets`
 
-分页查询 datasets，支持按 org 过滤和模糊搜索。
+分页查询 datasets，支持按 org 过滤、模糊搜索和排序。默认按 `updated_at DESC` 排序。
 
 ```python
+from rock.sdk.envhub.datasets import SortField, SortOrder
+
 result = client.list_datasets(
-    org="princeton-nlp",  # 可选，按组织过滤
-    query="SWE",          # 可选，模糊搜索 org/name
+    org="princeton-nlp",           # 可选，按组织过滤
+    query="SWE",                   # 可选，模糊搜索 org/name
+    sort_by=SortField.NAME,        # 可选，排序字段 (name/created_at/updated_at)
+    sort_order=SortOrder.ASC,      # 可选，排序方向 (asc/desc)
     offset=0,
     limit=20,
 )
@@ -110,6 +114,15 @@ result = client.list_datasets(
 # result.offset: int
 # result.limit: int | None
 ```
+
+**排序说明：**
+
+| `sort_by` | `sort_order` | 行为 |
+|-----------|-------------|------|
+| `None` | `None` | 默认 `updated_at DESC` |
+| `SortField.NAME` | `None` | `name ASC` |
+| `SortField.CREATED_AT` | `SortOrder.DESC` | `created_at DESC` |
+| `SortField.UPDATED_AT` | `SortOrder.ASC` | `updated_at ASC` |
 
 ---
 
@@ -139,7 +152,7 @@ ok = client.delete_dataset("princeton-nlp", "SWE-bench_Verified")
 
 #### `register_instance`
 
-注册或更新一个 instance（task）。若 dataset 不存在则自动创建。
+注册或更新一个 instance（task）。若 dataset 不存在则自动创建。注册时会自动创建对应的 Split 记录并更新 `task_count`。
 
 ```python
 inst = client.register_instance(
@@ -155,6 +168,7 @@ inst = client.register_instance(
     difficulty="medium",
     base_commit="abc123",
     image_uris=["registry.example.com/swebench/django:11099"],
+    tags=["django", "queryset", "union"],
     raw='{"hints_text": "..."}',
     source_revision="v1.0",
     imported_from="swebench-raw",
@@ -179,6 +193,7 @@ inst = client.register_instance(
 | `difficulty` | `str \| None` | No | 难度 (easy/medium/hard) |
 | `base_commit` | `str \| None` | No | 基准 commit SHA |
 | `image_uris` | `list[str] \| None` | No | 关联镜像 URI 列表 |
+| `tags` | `list[str] \| None` | No | 标签列表 |
 | `raw` | `str \| None` | No | 原始数据 (JSON string) |
 | `source_revision` | `str \| None` | No | 导入时的源版本 |
 | `imported_from` | `str \| None` | No | 导入来源标识 |
@@ -188,7 +203,7 @@ inst = client.register_instance(
 
 #### `register_instances_batch`
 
-批量注册 instances。
+批量注册 instances。自动创建对应的 Split 记录并更新 `task_count`。支持 `tags` 字段。
 
 ```python
 count = client.register_instances_batch(
@@ -196,8 +211,8 @@ count = client.register_instances_batch(
     dataset="SWE-bench_Verified",
     split="test",
     instances=[
-        {"name": "django__django-11099", "language": "python", "difficulty": "medium"},
-        {"name": "django__django-11283", "language": "python", "difficulty": "hard"},
+        {"name": "django__django-11099", "language": "python", "difficulty": "medium", "tags": ["django"]},
+        {"name": "django__django-11283", "language": "python", "difficulty": "hard", "tags": ["django", "orm"]},
     ],
 )
 # Returns: int (处理的总条目数)
@@ -218,7 +233,7 @@ inst = client.get_instance("princeton-nlp", "SWE-bench_Verified", "test", "djang
 
 #### `delete_instance`
 
-删除单个 instance，自动更新 task_counts。
+删除单个 instance，自动更新对应 Split 的 `task_count`。
 
 ```python
 ok = client.delete_instance("princeton-nlp", "SWE-bench_Verified", "test", "django__django-11099")
@@ -229,7 +244,7 @@ ok = client.delete_instance("princeton-nlp", "SWE-bench_Verified", "test", "djan
 
 #### `recalculate_task_counts`
 
-重新计算 dataset 的 task_counts（从 instances 表聚合）。
+重新计算 dataset 各 split 的 `task_count`（从 instances 表聚合，更新 splits 表）。
 
 ```python
 counts = client.recalculate_task_counts("princeton-nlp", "SWE-bench_Verified")
@@ -264,7 +279,7 @@ result = client.list_org_datasets("princeton-nlp", offset=0, limit=50)
 
 #### `list_dataset_splits`
 
-列出 dataset 的所有 splits。
+列出 dataset 的所有 split 名称（从 splits 表查询）。
 
 ```python
 splits = client.list_dataset_splits("princeton-nlp", "SWE-bench_Verified")
@@ -273,14 +288,35 @@ splits = client.list_dataset_splits("princeton-nlp", "SWE-bench_Verified")
 
 ---
 
+#### `list_dataset_split_info`
+
+列出 dataset 的所有 split 详细信息（分页，支持排序）。默认按 `name ASC` 排序。
+
+```python
+result = client.list_dataset_split_info(
+    "princeton-nlp", "SWE-bench_Verified",
+    sort_by=SortField.CREATED_AT,
+    sort_order=SortOrder.DESC,
+    offset=0, limit=50,
+)
+# Returns: PageResult[SplitInfo]
+# result.items[0].name       -> "test"
+# result.items[0].task_count -> 500
+# result.items[0].created_by -> "importer-v2"
+```
+
+---
+
 #### `list_dataset_tasks`
 
-列出某个 split 下所有 instance 名称（分页）。
+列出某个 split 下所有 instance 名称（分页，支持排序）。默认按 `name ASC` 排序。
 
 ```python
 result = client.list_dataset_tasks(
     "princeton-nlp", "SWE-bench_Verified", "test",
-    query="django",  # 可选模糊搜索
+    query="django",                    # 可选模糊搜索
+    sort_by=SortField.NAME,            # 可选排序字段
+    sort_order=SortOrder.DESC,         # 可选排序方向
     offset=0, limit=100,
 )
 # Returns: PageResult[str]
@@ -290,12 +326,14 @@ result = client.list_dataset_tasks(
 
 #### `list_dataset_task_entries`
 
-列出某个 split 下所有 instance 的详细信息（分页）。
+列出某个 split 下所有 instance 的详细信息（分页，支持排序）。默认按 `name ASC` 排序。返回的 `TaskEntry` 包含 `tags` 和 `created_at` 字段。
 
 ```python
 result = client.list_dataset_task_entries(
     "princeton-nlp", "SWE-bench_Verified", "test",
     query="django",
+    sort_by=SortField.UPDATED_AT,
+    sort_order=SortOrder.DESC,
     offset=0, limit=20,
 )
 # Returns: PageResult[TaskEntry]
@@ -475,6 +513,27 @@ class PageResult(Generic[T]):
     limit: int | None # 每页大小 (None = 不限)
 ```
 
+### `SortOrder`
+
+排序方向枚举。
+
+```python
+class SortOrder(str, Enum):
+    ASC = "asc"
+    DESC = "desc"
+```
+
+### `SortField`
+
+排序字段枚举，适用于 Dataset、Task、Split 列表。
+
+```python
+class SortField(str, Enum):
+    NAME = "name"
+    CREATED_AT = "created_at"
+    UPDATED_AT = "updated_at"
+```
+
 ### `DatasetInfo`
 
 ```python
@@ -491,8 +550,10 @@ class DatasetInfo:
     logo_url: str | None = None
     os: str | None = None
     version: str | None = None
-    splits: list[str] = []           # 可用 splits
-    task_counts: dict[str, int] = {} # {split: count}
+    splits: list[str] = []           # 可用 splits（从 splits 表聚合）
+    task_counts: dict[str, int] = {} # {split: count}（从 splits 表聚合）
+    created_at: str | None = None    # 创建时间 (ISO 8601)
+    updated_at: str | None = None    # 更新时间 (ISO 8601)
 ```
 
 ### `TaskEntry`
@@ -516,7 +577,23 @@ class TaskEntry:
     raw: str | None = None
     source_revision: str | None = None
     imported_from: str | None = None
+    tags: list[str] | None = None    # 标签列表
     created_by: str | None = None
+    created_at: str | None = None    # 创建时间 (ISO 8601)
+    updated_at: str | None = None
+```
+
+### `SplitInfo`
+
+Split 详细信息，由 `list_dataset_split_info` 返回。
+
+```python
+@dataclass
+class SplitInfo:
+    name: str
+    task_count: int = 0              # 该 split 下的 instance 数量
+    created_by: str | None = None
+    created_at: str | None = None
     updated_at: str | None = None
 ```
 
@@ -574,6 +651,7 @@ class AuditEventInfo:
 |-------|------------|-------------------|
 | `datasets` | `id` (auto) | `(org, name)` |
 | `instances` | `id` (auto) | `(dataset_id, split, name)` |
+| `splits` | `id` (auto) | `(dataset_id, name)` |
 | `images` | `source_image_uri` | — |
 | `dataset_permissions` | `id` (auto) | `(dataset_id, user_id)` |
 | `audit_events` | `id` (auto) | — |
@@ -597,12 +675,11 @@ class AuditEventInfo:
 | `logo_url` | `String(512)` | Yes | `NULL` | Logo URL |
 | `os` | `String(64)` | Yes | `NULL` | 目标操作系统 |
 | `version` | `String(64)` | Yes | `NULL` | 版本号 |
-| `task_counts` | `JSON` | Yes | `{}` | 各 split 的 task 数量 `{split: count}` |
 | `created_at` | `DateTime` | Yes | `now()` | 创建时间 |
 | `updated_at` | `DateTime` | Yes | `now()` | 更新时间（自动维护） |
 
 **Unique:** `(org, name)`
-**Relationships:** `instances` (1:N, cascade delete), `permissions` (1:N, cascade delete)
+**Relationships:** `instances` (1:N, cascade delete), `splits` (1:N, cascade delete), `permissions` (1:N, cascade delete)
 
 ### Table: `instances`
 
@@ -625,6 +702,7 @@ class AuditEventInfo:
 | `difficulty` | `String(64)` | Yes | `NULL` | 难度 (easy/medium/hard) |
 | `base_commit` | `String(64)` | Yes | `NULL` | 基准 commit SHA |
 | `image_uris` | `JSON` | Yes | `NULL` | 关联镜像 URI 列表 |
+| `tags` | `JSON` | Yes | `[]` | 标签列表 |
 | `raw` | `Text` | Yes | `NULL` | 原始数据 (JSON string) |
 | `source_revision` | `String(128)` | Yes | `NULL` | 导入时的源版本 |
 | `imported_from` | `String(512)` | Yes | `NULL` | 导入来源标识 |
@@ -634,6 +712,23 @@ class AuditEventInfo:
 
 **Unique:** `(dataset_id, split, name)`
 **Indexes:** `(dataset_id, split)` 复合索引, `format`, `language`
+
+### Table: `splits`
+
+数据集分片元数据表，记录每个 split 的 task 数量和创建信息。注册 instance 时自动创建。
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `id` | `Integer` | No | autoincrement | 主键 |
+| `dataset_id` | `Integer` | No | — | 外键 → `datasets.id`（ON DELETE CASCADE） |
+| `name` | `String(255)` | No | — | Split 名称 (train/test/dev) |
+| `task_count` | `Integer` | No | `0` | 该 split 下的 instance 数量 |
+| `created_by` | `String(255)` | Yes | `NULL` | 创建者 |
+| `created_at` | `DateTime` | Yes | `now()` | 创建时间 |
+| `updated_at` | `DateTime` | Yes | `now()` | 更新时间（自动维护） |
+
+**Unique:** `(dataset_id, name)`
+**Indexes:** `(dataset_id, name)` 复合索引
 
 ### Table: `images`
 
@@ -691,6 +786,7 @@ class AuditEventInfo:
 
 ```
 Dataset 1──N Instance            (cascade delete)
+Dataset 1──N Split               (cascade delete)
 Dataset 1──N DatasetPermission   (cascade delete)
 ```
 
@@ -701,16 +797,27 @@ Dataset 1──N DatasetPermission   (cascade delete)
 │    datasets      │       │      instances        │
 ├─────────────────┤       ├──────────────────────┤
 │ id (PK)         │──┐    │ id (PK)              │
-│ org             │  │    │ dataset_id (FK)  ←───┘
+│ org             │  ├───>│ dataset_id (FK)      │
 │ name            │  │    │ split                 │
 │ description     │  │    │ name                  │
 │ tags            │  │    │ type, size, format... │
 │ owner           │  │    │ language, difficulty  │
-│ homepage, repo  │  │    │ image_uris, raw       │
-│ task_counts     │  │    │ created_at/updated_at │
-│ created_at      │  │    └──────────────────────┘
-│ updated_at      │  │
-└─────────────────┘  │    ┌──────────────────────┐
+│ homepage, repo  │  │    │ image_uris, tags, raw │
+│ created_at      │  │    │ created_at/updated_at │
+│ updated_at      │  │    └──────────────────────┘
+└─────────────────┘  │
+                     │    ┌──────────────────────┐
+                     │    │       splits          │
+                     │    ├──────────────────────┤
+                     ├───>│ id (PK)              │
+                     │    │ dataset_id (FK)      │
+                     │    │ name                  │
+                     │    │ task_count            │
+                     │    │ created_by            │
+                     │    │ created_at/updated_at │
+                     │    └──────────────────────┘
+                     │
+                     │    ┌──────────────────────┐
                      │    │ dataset_permissions   │
                      │    ├──────────────────────┤
                      └───>│ id (PK)              │
@@ -743,7 +850,7 @@ Dataset 1──N DatasetPermission   (cascade delete)
 ## Usage Example
 
 ```python
-from rock.sdk.envhub.datasets import DatasetMetadataClient
+from rock.sdk.envhub.datasets import DatasetMetadataClient, SortField, SortOrder
 
 # Initialize
 client = DatasetMetadataClient("postgresql+psycopg2://user:pass@localhost/envhub")
@@ -756,16 +863,36 @@ client.register_dataset(
     owner="swe-bench-team",
 )
 
-# Batch import instances
+# Batch import instances (with tags)
 instances = [
-    {"name": f"task-{i}", "language": "python", "difficulty": "medium"}
+    {"name": f"task-{i}", "language": "python", "difficulty": "medium", "tags": ["python", "swe"]}
     for i in range(500)
 ]
 client.register_instances_batch("princeton-nlp", "SWE-bench_Verified", "test", instances)
 
-# Browse
+# Browse — dataset info includes splits and task_counts from splits table
 info = client.get_dataset("princeton-nlp", "SWE-bench_Verified")
 print(f"Splits: {info.splits}, Counts: {info.task_counts}")
+print(f"Created: {info.created_at}, Updated: {info.updated_at}")
+
+# List datasets sorted by update time (default)
+result = client.list_datasets(org="princeton-nlp")
+
+# List datasets sorted by name
+result = client.list_datasets(sort_by=SortField.NAME, sort_order=SortOrder.ASC)
+
+# List split details
+splits = client.list_dataset_split_info("princeton-nlp", "SWE-bench_Verified")
+for s in splits.items:
+    print(f"Split: {s.name}, Tasks: {s.task_count}")
+
+# List task entries with sorting and tags
+entries = client.list_dataset_task_entries(
+    "princeton-nlp", "SWE-bench_Verified", "test",
+    sort_by=SortField.UPDATED_AT, sort_order=SortOrder.DESC,
+)
+for e in entries.items:
+    print(f"Task: {e.name}, Tags: {e.tags}, Created: {e.created_at}")
 
 # Permission control
 client.grant_permission("princeton-nlp", "SWE-bench_Verified", "alice", role="editor")
@@ -779,13 +906,16 @@ client.log_event("dataset", "princeton-nlp/SWE-bench_Verified", "import", "syste
 
 ## Testing
 
-41 unit tests covering:
+63 unit tests covering:
 - Dataset CRUD (register/list/get/delete)
 - Instance CRUD (register/batch/get/delete)
 - Image CRUD (register/list/update/delete)
 - Permission CRUD (grant/revoke/get/list)
 - Audit event logging and querying
-- task_counts automatic maintenance
+- **Dataset 排序** — 默认 `updated_at DESC`，按 name/created_at/updated_at 排序
+- **Task 排序** — 按 name/updated_at 排序，task entries 包含 created_at
+- **Instance 标签** — 注册带 tags，task entry 返回 tags，批量注册带 tags
+- **Split 表** — 自动创建、列表查询、排序、task_count 计数、删除级联、dataset info 聚合、recalculate、批量注册创建 split
 - SQLite dialect fallback
 
 Run tests:

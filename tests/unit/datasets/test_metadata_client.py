@@ -1,7 +1,9 @@
+import time
+
 import pytest
 
 from rock.sdk.envhub.datasets.metadata_client import DatasetMetadataClient
-from rock.sdk.envhub.datasets.models import PageResult, TaskEntry
+from rock.sdk.envhub.datasets.models import PageResult, SortField, SortOrder, TaskEntry
 
 
 @pytest.fixture()
@@ -299,3 +301,226 @@ class TestAudit:
     def test_list_audit_events_empty(self, client):
         page = client.list_audit_events()
         assert page.total == 0
+
+
+class TestDatasetSorting:
+    def test_list_datasets_default_sort_by_updated_at_desc(self, client):
+        client.register_dataset("org1", "alpha")
+        client.register_dataset("org1", "beta")
+        client.register_dataset("org1", "gamma")
+        # touch gamma's updated_at by re-registering after a delay
+        time.sleep(1.1)
+        client.register_dataset("org1", "gamma", description="updated")
+
+        page = client.list_datasets("org1")
+        assert page.items[0].id == "org1/gamma"
+
+    def test_list_datasets_sort_by_name_asc(self, client):
+        client.register_dataset("org1", "charlie")
+        client.register_dataset("org1", "alpha")
+        client.register_dataset("org1", "bravo")
+
+        page = client.list_datasets("org1", sort_by=SortField.NAME, sort_order=SortOrder.ASC)
+        names = [item.id for item in page.items]
+        assert names == ["org1/alpha", "org1/bravo", "org1/charlie"]
+
+    def test_list_datasets_sort_by_name_desc(self, client):
+        client.register_dataset("org1", "alpha")
+        client.register_dataset("org1", "bravo")
+        client.register_dataset("org1", "charlie")
+
+        page = client.list_datasets("org1", sort_by=SortField.NAME, sort_order=SortOrder.DESC)
+        names = [item.id for item in page.items]
+        assert names == ["org1/charlie", "org1/bravo", "org1/alpha"]
+
+    def test_list_datasets_sort_by_created_at_asc(self, client):
+        client.register_dataset("org1", "first")
+        time.sleep(1.1)
+        client.register_dataset("org1", "second")
+
+        page = client.list_datasets("org1", sort_by=SortField.CREATED_AT, sort_order=SortOrder.ASC)
+        names = [item.id for item in page.items]
+        assert names == ["org1/first", "org1/second"]
+
+    def test_list_datasets_returns_created_at_and_updated_at(self, client):
+        client.register_dataset("org1", "bench")
+        info = client.list_datasets("org1").items[0]
+        assert info.created_at is not None
+        assert info.updated_at is not None
+
+    def test_get_dataset_returns_created_at_and_updated_at(self, client):
+        client.register_dataset("org1", "bench")
+        info = client.get_dataset("org1", "bench")
+        assert info.created_at is not None
+        assert info.updated_at is not None
+
+
+class TestTaskSorting:
+    def test_list_dataset_task_entries_sort_by_name_desc(self, client):
+        client.register_dataset("org1", "bench")
+        client.register_instance("org1", "bench", "test", "alpha")
+        client.register_instance("org1", "bench", "test", "bravo")
+        client.register_instance("org1", "bench", "test", "charlie")
+
+        page = client.list_dataset_task_entries(
+            "org1", "bench", "test", sort_by=SortField.NAME, sort_order=SortOrder.DESC
+        )
+        names = [e.name for e in page.items]
+        assert names == ["charlie", "bravo", "alpha"]
+
+    def test_list_dataset_task_entries_sort_by_updated_at(self, client):
+        client.register_dataset("org1", "bench")
+        client.register_instance("org1", "bench", "test", "old")
+        time.sleep(1.1)
+        client.register_instance("org1", "bench", "test", "new")
+
+        page = client.list_dataset_task_entries(
+            "org1", "bench", "test", sort_by=SortField.UPDATED_AT, sort_order=SortOrder.DESC
+        )
+        assert page.items[0].name == "new"
+
+    def test_list_dataset_tasks_sort_by_name_desc(self, client):
+        client.register_dataset("org1", "bench")
+        client.register_instance("org1", "bench", "test", "alpha")
+        client.register_instance("org1", "bench", "test", "charlie")
+        client.register_instance("org1", "bench", "test", "bravo")
+
+        page = client.list_dataset_tasks("org1", "bench", "test", sort_by=SortField.NAME, sort_order=SortOrder.DESC)
+        assert page.items == ["charlie", "bravo", "alpha"]
+
+    def test_task_entry_includes_created_at(self, client):
+        client.register_dataset("org1", "bench")
+        client.register_instance("org1", "bench", "test", "t1")
+        page = client.list_dataset_task_entries("org1", "bench", "test")
+        entry = page.items[0]
+        assert entry.created_at is not None
+        assert entry.updated_at is not None
+
+
+class TestInstanceTags:
+    def test_register_instance_with_tags(self, client):
+        client.register_dataset("org1", "bench")
+        inst = client.register_instance("org1", "bench", "test", "t1", tags=["nlp", "coding"])
+        assert inst.tags == ["nlp", "coding"]
+
+    def test_task_entry_includes_tags(self, client):
+        client.register_dataset("org1", "bench")
+        client.register_instance("org1", "bench", "test", "t1", tags=["nlp"])
+        client.register_instance("org1", "bench", "test", "t2")
+
+        page = client.list_dataset_task_entries("org1", "bench", "test")
+        entries = {e.name: e for e in page.items}
+        assert entries["t1"].tags == ["nlp"]
+        assert entries["t2"].tags == []
+
+    def test_batch_register_with_tags(self, client):
+        client.register_dataset("org1", "bench")
+        client.register_instances_batch(
+            "org1",
+            "bench",
+            "test",
+            [
+                {"name": "t1", "tags": ["nlp"]},
+                {"name": "t2", "tags": ["code", "python"]},
+            ],
+        )
+        page = client.list_dataset_task_entries("org1", "bench", "test")
+        entries = {e.name: e for e in page.items}
+        assert entries["t1"].tags == ["nlp"]
+        assert entries["t2"].tags == ["code", "python"]
+
+
+class TestSplitTable:
+    def test_register_instance_auto_creates_split(self, client):
+        client.register_dataset("org1", "bench")
+        client.register_instance("org1", "bench", "test", "t1")
+        client.register_instance("org1", "bench", "train", "t2")
+
+        splits = client.list_dataset_splits("org1", "bench")
+        assert sorted(splits) == ["test", "train"]
+
+    def test_list_dataset_split_info(self, client):
+        client.register_dataset("org1", "bench")
+        client.register_instance("org1", "bench", "test", "t1")
+        client.register_instance("org1", "bench", "test", "t2")
+        client.register_instance("org1", "bench", "train", "t3")
+
+        page = client.list_dataset_split_info("org1", "bench")
+        assert page.total == 2
+        infos = {s.name: s for s in page.items}
+        assert infos["test"].task_count == 2
+        assert infos["train"].task_count == 1
+        assert infos["test"].created_at is not None
+
+    def test_list_dataset_split_info_sorted(self, client):
+        client.register_dataset("org1", "bench")
+        client.register_instance("org1", "bench", "beta", "t1")
+        time.sleep(0.05)
+        client.register_instance("org1", "bench", "alpha", "t2")
+
+        page = client.list_dataset_split_info("org1", "bench", sort_by=SortField.NAME, sort_order=SortOrder.ASC)
+        names = [s.name for s in page.items]
+        assert names == ["alpha", "beta"]
+
+        page = client.list_dataset_split_info("org1", "bench", sort_by=SortField.CREATED_AT, sort_order=SortOrder.DESC)
+        assert page.items[0].name == "alpha"
+
+    def test_split_task_count_matches_instance_count(self, client):
+        client.register_dataset("org1", "bench")
+        for i in range(5):
+            client.register_instance("org1", "bench", "test", f"t{i}")
+
+        page = client.list_dataset_split_info("org1", "bench")
+        assert page.items[0].task_count == 5
+
+    def test_split_task_count_after_delete(self, client):
+        client.register_dataset("org1", "bench")
+        client.register_instance("org1", "bench", "test", "t1")
+        client.register_instance("org1", "bench", "test", "t2")
+        client.delete_instance("org1", "bench", "test", "t1")
+
+        page = client.list_dataset_split_info("org1", "bench")
+        assert page.items[0].task_count == 1
+
+    def test_dataset_info_splits_and_task_counts_from_split_table(self, client):
+        client.register_dataset("org1", "bench")
+        client.register_instance("org1", "bench", "test", "t1")
+        client.register_instance("org1", "bench", "test", "t2")
+        client.register_instance("org1", "bench", "train", "t3")
+
+        info = client.get_dataset("org1", "bench")
+        assert sorted(info.splits) == ["test", "train"]
+        assert info.task_counts == {"test": 2, "train": 1}
+
+    def test_list_dataset_split_info_empty(self, client):
+        page = client.list_dataset_split_info("no", "exist")
+        assert page.total == 0
+        assert page.items == []
+
+    def test_recalculate_task_counts_updates_split(self, client):
+        client.register_dataset("org1", "bench")
+        client.register_instance("org1", "bench", "test", "t1")
+        client.register_instance("org1", "bench", "test", "t2")
+        client.register_instance("org1", "bench", "train", "t3")
+
+        counts = client.recalculate_task_counts("org1", "bench")
+        assert counts == {"test": 2, "train": 1}
+
+        page = client.list_dataset_split_info("org1", "bench")
+        infos = {s.name: s for s in page.items}
+        assert infos["test"].task_count == 2
+        assert infos["train"].task_count == 1
+
+    def test_batch_register_creates_split(self, client):
+        client.register_dataset("org1", "bench")
+        client.register_instances_batch(
+            "org1",
+            "bench",
+            "test",
+            [{"name": "t1"}, {"name": "t2"}, {"name": "t3"}],
+        )
+
+        page = client.list_dataset_split_info("org1", "bench")
+        assert page.total == 1
+        assert page.items[0].name == "test"
+        assert page.items[0].task_count == 3
