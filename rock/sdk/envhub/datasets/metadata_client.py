@@ -53,6 +53,7 @@ class DatasetMetadataClient:
         org: str,
         name: str,
         *,
+        source: str = "",
         description: str = "",
         tags: list[str] | None = None,
         owner: str = "",
@@ -67,6 +68,7 @@ class DatasetMetadataClient:
         return self._db.register_dataset(
             org,
             name,
+            source=source,
             description=description,
             tags=tags,
             owner=owner,

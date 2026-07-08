@@ -172,6 +172,7 @@ class DbDatasetRegistry:
         org: str,
         name: str,
         *,
+        source: str = "",
         description: str = "",
         tags: list[str] | None = None,
         owner: str = "",
@@ -186,6 +187,7 @@ class DbDatasetRegistry:
         with self._session() as session:
             ds = self._get_dataset(session, org, name)
             kwargs = dict(
+                source=source,
                 description=description,
                 tags=tags or [],
                 owner=owner,
@@ -350,6 +352,7 @@ class DbDatasetRegistry:
         ]
         return DatasetInfo(
             id=ds.full_name,
+            source=ds.source or "",
             description=ds.description or "",
             tags=ds.tags or [],
             owner=ds.owner or "",

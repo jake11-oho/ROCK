@@ -26,6 +26,7 @@ class Dataset(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     org = Column(String(255), nullable=False, index=True)
     name = Column(String(255), nullable=False)
+    source = Column(String(128), default="", server_default="")
     description = Column(Text, default="")
     tags = Column(JSON, default=list)
     owner = Column(String(255), default="")

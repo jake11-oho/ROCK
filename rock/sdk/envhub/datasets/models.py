@@ -36,6 +36,7 @@ class DatasetSpec:
 @dataclass
 class DatasetInfo:
     id: str  # "org/dataset"
+    source: str = ""
     description: str = ""
     tags: list[str] = field(default_factory=list)
     owner: str = ""
