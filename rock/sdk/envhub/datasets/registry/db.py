@@ -116,8 +116,21 @@ class DbDatasetRegistry:
 
     @staticmethod
     def _resolve_sort_column(model, sort_by: SortField | None, sort_order: SortOrder | None):
+        """Resolve sort parameters into a list of SQLAlchemy order-by clauses.
+
+        Returns None when sort_by is None (caller applies a default).
+        For NAME on models with an org column, org is used as a primary
+        sort key so that datasets are ordered by org/name lexicographically.
+        """
         if sort_by is None:
             return None
+        order = sort_order or SortOrder.ASC
+        if sort_by == SortField.NAME and hasattr(model, "org"):
+            org_col = func.lower(model.org)
+            name_col = func.lower(model.name)
+            if order == SortOrder.ASC:
+                return [org_col.asc(), name_col.asc()]
+            return [org_col.desc(), name_col.desc()]
         field_map = {
             SortField.NAME: func.lower(model.name),
             SortField.CREATED_AT: model.created_at,
@@ -126,8 +139,7 @@ class DbDatasetRegistry:
         col = field_map.get(sort_by)
         if col is None:
             return None
-        order = sort_order or SortOrder.ASC
-        return col.asc() if order == SortOrder.ASC else col.desc()
+        return [col.asc() if order == SortOrder.ASC else col.desc()]
 
     def _get_dataset(self, session: Session, org: str, name: str) -> Dataset | None:
         return session.query(Dataset).filter(Dataset.org == org, Dataset.name == name).first()
@@ -386,11 +398,11 @@ class DbDatasetRegistry:
                 pattern = f"%{query}%"
                 q = q.filter((Dataset.org.ilike(pattern)) | (Dataset.name.ilike(pattern)))
 
-            order_clause = self._resolve_sort_column(Dataset, sort_by, sort_order)
-            if order_clause is not None:
-                q = q.order_by(order_clause)
+            order_clauses = self._resolve_sort_column(Dataset, sort_by, sort_order)
+            if order_clauses is not None:
+                q = q.order_by(*order_clauses)
             else:
-                q = q.order_by(Dataset.updated_at.desc())
+                q = q.order_by(func.lower(Dataset.org).asc(), func.lower(Dataset.name).asc())
 
             total = q.count()
             q = q.offset(offset)
@@ -445,9 +457,9 @@ class DbDatasetRegistry:
 
             q = session.query(Split).filter(Split.dataset_id == ds.id)
 
-            order_clause = self._resolve_sort_column(Split, sort_by, sort_order)
-            if order_clause is not None:
-                q = q.order_by(order_clause)
+            order_clauses = self._resolve_sort_column(Split, sort_by, sort_order)
+            if order_clauses is not None:
+                q = q.order_by(*order_clauses)
             else:
                 q = q.order_by(Split.name.asc())
 
@@ -489,9 +501,9 @@ class DbDatasetRegistry:
             if query:
                 q = q.filter(Instance.name.ilike(f"%{query}%"))
 
-            order_clause = self._resolve_sort_column(Instance, sort_by, sort_order)
-            if order_clause is not None:
-                q = q.order_by(order_clause)
+            order_clauses = self._resolve_sort_column(Instance, sort_by, sort_order)
+            if order_clauses is not None:
+                q = q.order_by(*order_clauses)
             else:
                 q = q.order_by(Instance.name.asc())
 
@@ -524,9 +536,9 @@ class DbDatasetRegistry:
             if query:
                 q = q.filter(Instance.name.ilike(f"%{query}%"))
 
-            order_clause = self._resolve_sort_column(Instance, sort_by, sort_order)
-            if order_clause is not None:
-                q = q.order_by(order_clause)
+            order_clauses = self._resolve_sort_column(Instance, sort_by, sort_order)
+            if order_clauses is not None:
+                q = q.order_by(*order_clauses)
             else:
                 q = q.order_by(Instance.name.asc())
 
