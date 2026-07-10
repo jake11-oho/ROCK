@@ -304,7 +304,20 @@ class TestAudit:
 
 
 class TestDatasetSorting:
-    def test_list_datasets_default_sort_by_updated_at_desc(self, client):
+    def test_list_datasets_default_sort_by_org_name_asc(self, client):
+        client.register_dataset("org1", "gamma")
+        client.register_dataset("org1", "alpha")
+        client.register_dataset("org1", "beta")
+        # touch gamma's updated_at by re-registering after a delay
+        time.sleep(1.1)
+        client.register_dataset("org1", "gamma", description="updated")
+
+        # default sort is now org+name ASC, not updated_at DESC
+        page = client.list_datasets("org1")
+        ids = [item.id for item in page.items]
+        assert ids == ["org1/alpha", "org1/beta", "org1/gamma"]
+
+    def test_list_datasets_sort_by_updated_at_desc(self, client):
         client.register_dataset("org1", "alpha")
         client.register_dataset("org1", "beta")
         client.register_dataset("org1", "gamma")
@@ -312,7 +325,7 @@ class TestDatasetSorting:
         time.sleep(1.1)
         client.register_dataset("org1", "gamma", description="updated")
 
-        page = client.list_datasets("org1")
+        page = client.list_datasets("org1", sort_by=SortField.UPDATED_AT, sort_order=SortOrder.DESC)
         assert page.items[0].id == "org1/gamma"
 
     def test_list_datasets_sort_by_name_asc(self, client):

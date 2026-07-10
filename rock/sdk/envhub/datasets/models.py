@@ -47,7 +47,7 @@ class DatasetInfo:
     logo_url: str | None = None
     os: str | None = None
     version: str | None = None
-    splits: list["SplitInfo"] = field(default_factory=list)
+    splits: list[SplitInfo] = field(default_factory=list)
     created_at: str | None = None
     updated_at: str | None = None
 
